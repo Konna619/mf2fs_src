@@ -1506,7 +1506,7 @@ static int read_node_page(struct page *page, int op_flags)
 	fio.new_blkaddr = fio.old_blkaddr = ni.blk_addr;
 
 	err = f2fs_submit_page_bio(&fio);
-	f2fs_err(sbi, "read node page from ssd nid=%u blkaddr=%u", ni.nid, ni.blk_addr);
+	f2fs_info(sbi, "read node page from ssd nid=%u blkaddr=%u", ni.nid, ni.blk_addr);
 
 skip_ori_read:
 

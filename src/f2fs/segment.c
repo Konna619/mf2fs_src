@@ -3549,7 +3549,7 @@ static int do_write_page_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_p
 
 	allocated = f2fs_new_blocks(sbi, &blocknr, 1, 0, 0, NODE_PM, ALLOC_FROM_HEAD);
 	if(allocated<=0){
-		printk("PM has no more space for node page!\n");
+		f2fs_warn(sbi, "PM has no more space for node page!\n");
 		if(!from_pm){// 从ssd写入ssd
 			// goto traditional_wirte_node_page;
 			return -ENOSPC;
@@ -4751,7 +4751,7 @@ static int build_sit_entries(struct f2fs_sb_info *sbi)
 	up_read(&curseg->journal_rwsem);
 
 	//konna
-	total_node_blocks += PM_S(sbi)->valid_node_blk_count;
+	total_node_blocks += le32_to_cpu(PM_S(sbi)->valid_node_blk_count);
 
 	if (!err && total_node_blocks != valid_node_count(sbi)) {
 		f2fs_err(sbi, "SIT is corrupted node# %u vs %u",

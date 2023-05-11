@@ -75,12 +75,12 @@ struct free_list {
 	unsigned long	block_end;		//f2fs_init_free_list
 
 	unsigned long	nr_blocks;		//f2fs_init_free_list
-	unsigned long	num_free_blocks;		//f2fs_init_free_list && f2fs_init_blockmap
-	unsigned long * free_blocks_bitmap;		//f2fs_init_blockmap
+	unsigned long	num_free_blocks;		//f2fs_init_free_list && f2fs_init_pm_blockmap
+	unsigned long * free_blocks_bitmap;		//f2fs_init_pm_blockmap
 	unsigned int free_block_bitmap_pages;	//f2fs_init_free_list
 
 	/* How many nodes in the rb tree? */
-	unsigned long	num_blocknode;			//f2fs_init_free_list && f2fs_init_blockmap
+	unsigned long	num_blocknode;			//f2fs_init_free_list && f2fs_init_pm_blockmap
 
 	// u32		csum;		/* Protect integrity */
 
@@ -145,7 +145,7 @@ void nova_free_dir_node(struct nova_range_node *bnode);
 void nova_free_vma_item(struct super_block *sb,
 	struct vma_item *item);
 */
-int f2fs_init_blockmap(struct f2fs_sb_info *sbi, int recovery);
+int f2fs_init_pm_blockmap(struct f2fs_sb_info *sbi, int recovery);
 int f2fs_free_blocks(struct f2fs_sb_info *sbi, unsigned long blocknr, int num, bool is_node);
 /*
 extern int nova_free_data_blocks(struct super_block *sb,

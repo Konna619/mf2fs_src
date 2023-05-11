@@ -1035,7 +1035,7 @@ struct f2fs_sm_info {
 	block_t main_blkaddr;		/* start block address of main area */
 	block_t ssa_blkaddr;		/* start block address of SSA area */
 
-	unsigned int segment_count;	/* total # of segments */
+	unsigned int segment_count;	/* total # of segments // 从seg0开始段的数量 */
 	unsigned int main_segments;	/* # of segments in main area */
 	unsigned int reserved_segments;	/* # of reserved segments */
 	unsigned int ovp_segments;	/* # of overprovision segments */
@@ -1429,18 +1429,18 @@ struct decompress_io_ctx {
 #define F2FS_PM_SUPER_ADDR (3UL<<PAGE_SHIFT)
 
 struct f2fs_pm_super{
-	unsigned int magic;
+	__le32 magic;
 
-	unsigned int nr_blocks;
-	unsigned int valid_node_blk_count;
+	__le32 nr_blocks;
+	__le32 valid_node_blk_count;
 
-	block_t cp_blkaddr;
-	block_t sit_blkaddr;
-	block_t nat_blkaddr;
-	block_t ssa_blkaddr;
-	block_t ndb_blkaddr;	// nid bitmap offset
-	block_t fbb_blkaddr;	// free blocks bitmap offset
-	block_t frea_area_blkaddr;
+	__le32 cp_blkaddr;
+	__le32 sit_blkaddr;
+	__le32 nat_blkaddr;
+	__le32 ssa_blkaddr;
+	__le32 ndb_blkaddr;	// nid bitmap offset
+	__le32 fbb_blkaddr;	// free blocks bitmap offset
+	__le32 free_area_blkaddr;
 };
 
 /* struct for pm information */
@@ -1455,7 +1455,17 @@ struct f2fs_pm_info{
 	/* for pm super block */
 	struct f2fs_pm_super p_fps;
 
-	/* for f2fs meta*/
+	/* for info from pm super block */
+	unsigned long p_nr_blocks;
+	block_t p_cp_blkaddr;
+	block_t p_sit_blkaddr;
+	block_t p_nat_blkaddr;
+	block_t p_ssa_blkaddr;
+	block_t p_ndb_blkaddr;	// nid bitmap offset
+	block_t p_fbb_blkaddr;	// free blocks bitmap offset
+	block_t p_free_area_blkaddr;
+
+	/* for f2fs meta virtual address */
 	void * p_super_va_start;
 	void * p_cp_va_start;
 	void * p_sit_va_start;
@@ -1464,6 +1474,10 @@ struct f2fs_pm_info{
 	// void * p_data_block_bitmap_va_start;
 	void * p_ndoe_page_bitmap_va_start;
 	void * p_free_blocks_bitmap_va_start;
+
+	/* for pm block address offset */
+	block_t p_lba_start;
+	block_t p_lba_end;
 };
 
 struct f2fs_sb_info {

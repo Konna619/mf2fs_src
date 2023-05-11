@@ -38,7 +38,7 @@ int f2fs_alloc_block_free_lists(struct f2fs_sb_info *sbi){
 	struct free_list *free_list;
 
 	sbi->free_list = kcalloc(1, sizeof(struct free_list), GFP_KERNEL);
-	printk("free_lits size=%ld", sizeof(struct free_list));
+	f2fs_info(sbi, "free_lits size=%ld", sizeof(struct free_list));
 
 	if(!sbi->free_list)
 		return -ENOMEM;
@@ -66,11 +66,11 @@ void f2fs_delete_free_lists(struct f2fs_sb_info *sbi){
 // 初始化freelist的起始块地址和末地址，留出给sb，cp，sit，nat，saa的空间
 static void f2fs_init_free_list(struct f2fs_sb_info *sbi, struct free_list *free_list, int index){
 
-	free_list->nr_blocks = PM_S(sbi)->nr_blocks;
-	free_list->alloc_node_pages = PM_S(sbi)->valid_node_blk_count;
-	free_list->block_start = PM_S(sbi)->frea_area_blkaddr; // reserved for metadata
+	free_list->nr_blocks = PM_I(sbi)->p_nr_blocks;
+	free_list->alloc_node_pages = le32_to_cpu(PM_S(sbi)->valid_node_blk_count);
+	free_list->block_start = PM_I(sbi)->p_free_area_blkaddr; // reserved for metadata
 	free_list->block_end = free_list->nr_blocks -1;
-	free_list->free_block_bitmap_pages = PM_S(sbi)->frea_area_blkaddr - PM_S(sbi)->fbb_blkaddr;
+	free_list->free_block_bitmap_pages = free_list->block_start - PM_I(sbi)->p_fbb_blkaddr;
 	free_list->num_free_blocks = 0;
 	free_list->num_blocknode = 0;
 	// sbi->curr_block = free_area_blkaddr;
@@ -106,7 +106,7 @@ void f2fs_destroy_range_nodes(struct f2fs_sb_info *sbi){
 }
 
 // 初始化freelist的空闲块信息和空闲块树
-int f2fs_init_blockmap(struct f2fs_sb_info *sbi, int recovery){
+int f2fs_init_pm_blockmap(struct f2fs_sb_info *sbi, int recovery){
 	struct rb_root *tree;
 	struct f2fs_range_node *blknode;
 	struct free_list *free_list;
