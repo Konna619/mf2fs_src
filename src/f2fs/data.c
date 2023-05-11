@@ -694,6 +694,8 @@ void f2fs_flush_merged_writes(struct f2fs_sb_info *sbi)
 /*
  * Fill the locked page with data located in the block address.
  * A caller needs to unlock the page on failure.
+ * 调用该函数之前应将page加锁并增加引用计数
+ * 此函数成功返回，仅需将引用计数减一；否则还需解锁page
  */
 int f2fs_submit_page_bio(struct f2fs_io_info *fio)
 {
@@ -939,6 +941,28 @@ alloc_new:
 	return 0;
 }
 
+// 真正写页，调用前加锁并get_page，调用后解锁并put_page
+// 有些函数在调用后仅解锁了page，这是因为page在vfs层会减少引用计数
+// 例：write_cache_pages
+/**
+ write_cache_pages
+	->pagevec_lookup_range_tag
+		->find_get_pages_range_tag  				//ref
+	->lock_page										//lock
+	->writepage:f2fs_write_data_page
+		->f2fs_write_single_data_page
+			->f2fs_do_write_data_page
+				->f2fs_outplace_write_data
+					->do_write_page
+						->f2fs_submit_page_write	//here
+			->unlock_page							//unlock
+	->pagevec_release
+		->__pagevec_release
+			->release_pages
+				->put_page_testzero					//deref
+
+
+ */
 void f2fs_submit_page_write(struct f2fs_io_info *fio)
 {
 	struct f2fs_sb_info *sbi = fio->sbi;
@@ -957,7 +981,7 @@ next:
 			goto out;
 		}
 		fio = list_first_entry(&io->io_list,
-						struct f2fs_io_info, list);
+						struct f2fs_io_info, list);// 提交write_io链表中的所有fio，一个f2fs_io_info对应一个页，一个f2fs_bio_info对应一个bio
 		list_del(&fio->list);
 		spin_unlock(&io->io_lock);
 	}
@@ -991,14 +1015,14 @@ alloc_new:
 			fio->retry = true;
 			goto skip;
 		}
-		io->bio = __bio_alloc(fio, BIO_MAX_PAGES);
+		io->bio = __bio_alloc(fio, BIO_MAX_PAGES);// 分配有256页的bio
 		f2fs_set_bio_crypt_ctx(io->bio, fio->page->mapping->host,
 				       bio_page->index, fio, GFP_NOIO);
 		io->fio = *fio;
 	}
 
-	if (bio_add_page(io->bio, bio_page, PAGE_SIZE, 0) < PAGE_SIZE) {
-		__submit_merged_bio(io);
+	if (bio_add_page(io->bio, bio_page, PAGE_SIZE, 0) < PAGE_SIZE) {// 把page加到bio中
+		__submit_merged_bio(io);// bio满了，先提交，再分配
 		goto alloc_new;
 	}
 
@@ -1097,6 +1121,7 @@ static int f2fs_submit_page_read(struct inode *inode, struct page *page,
 	return 0;
 }
 
+// 更新direct node中dn->ofs_in_node对应的blkaddr
 static void __set_data_blkaddr(struct dnode_of_data *dn)
 {
 	struct f2fs_node *rn = F2FS_NODE(dn->node_page);
@@ -1116,20 +1141,21 @@ static void __set_data_blkaddr(struct dnode_of_data *dn)
  * ->data_page
  *  ->node_page
  *    update block addresses in the node page
+ * 更新direct node中dn->ofs_in_node对应的blkaddr
  */
 void f2fs_set_data_blkaddr(struct dnode_of_data *dn)
 {
 	f2fs_wait_on_page_writeback(dn->node_page, NODE, true, true);
 	__set_data_blkaddr(dn);
 	if (set_page_dirty(dn->node_page))
-		dn->node_changed = true;
+		dn->node_changed = true;// 之前不dirty，node_changed设为true
 }
 
 void f2fs_update_data_blkaddr(struct dnode_of_data *dn, block_t blkaddr)
 {
 	dn->data_blkaddr = blkaddr;
 	f2fs_set_data_blkaddr(dn);
-	f2fs_update_extent_cache(dn);
+	f2fs_update_extent_cache(dn);// 这里需要注意
 }
 
 /* dn->ofs_in_node will be returned with up-to-date last block pointer */
@@ -1453,7 +1479,7 @@ int f2fs_preallocate_blocks(struct kiocb *iocb, struct iov_iter *from)
 		map.m_seg_type = f2fs_rw_hint_to_seg_type(iocb->ki_hint);
 		flag = f2fs_force_buffered_io(inode, iocb, from) ?
 					F2FS_GET_BLOCK_PRE_AIO :
-					F2FS_GET_BLOCK_PRE_DIO;
+					F2FS_GET_BLOCK_PRE_DIO;		// zbd返回true，F2FS_GET_BLOCK_PRE_AIO
 		goto map_blocks;
 	}
 	if (iocb->ki_pos + iov_iter_count(from) > MAX_INLINE_DATA(inode)) {
@@ -2454,8 +2480,13 @@ static int f2fs_read_data_page(struct file *file, struct page *page)
 	}
 
 	/* If the file has inline data, try to read it directly */
-	if (f2fs_has_inline_data(inode))
+	if (f2fs_has_inline_data(inode)){
+		// printk("file inode:%lu has inline data", inode->i_ino);
 		ret = f2fs_read_inline_data(inode, page);
+	}
+	// else{
+	// 	// printk("file inode:%lu has no inline data", inode->i_ino);
+	// }
 	if (ret == -EAGAIN)
 		ret = f2fs_mpage_readpages(inode, NULL, page);
 	return ret;

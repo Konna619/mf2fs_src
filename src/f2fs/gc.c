@@ -169,6 +169,7 @@ void f2fs_stop_gc_thread(struct f2fs_sb_info *sbi)
 	sbi->gc_thread = NULL;
 }
 
+// BG_GC回收，选择CB或AT，其他则选择GREEDY
 static int select_gc_type(struct f2fs_sb_info *sbi, int gc_type)
 {
 	int gc_mode;
@@ -182,7 +183,7 @@ static int select_gc_type(struct f2fs_sb_info *sbi, int gc_type)
 		gc_mode = GC_GREEDY;
 	}
 
-	switch (sbi->gc_mode) {
+	switch (sbi->gc_mode) {// 一般是GC_NORMAL，可以在sysfs中设置gc_idle或gc_urgent
 	case GC_IDLE_CB:
 		gc_mode = GC_CB;
 		break;
@@ -198,30 +199,31 @@ static int select_gc_type(struct f2fs_sb_info *sbi, int gc_type)
 	return gc_mode;
 }
 
+// gc_type表示前后台，type表示段类型
 static void select_policy(struct f2fs_sb_info *sbi, int gc_type,
 			int type, struct victim_sel_policy *p)
 {
 	struct dirty_seglist_info *dirty_i = DIRTY_I(sbi);
 
-	if (p->alloc_mode == SSR) {
-		p->gc_mode = GC_GREEDY;
-		p->dirty_bitmap = dirty_i->dirty_segmap[type];
+	if (p->alloc_mode == SSR) {// SSR模式
+		p->gc_mode = GC_GREEDY;// 有效块越少越好
+		p->dirty_bitmap = dirty_i->dirty_segmap[type];//到相应类型中找受害段
 		p->max_search = dirty_i->nr_dirty[type];
-		p->ofs_unit = 1;
-	} else if (p->alloc_mode == AT_SSR) {
-		p->gc_mode = GC_GREEDY;
-		p->dirty_bitmap = dirty_i->dirty_segmap[type];
+		p->ofs_unit = 1;// 一个段一个段的找
+	} else if (p->alloc_mode == AT_SSR) {// AT_SSR模式
+		p->gc_mode = GC_GREEDY;// 有效块越少越好
+		p->dirty_bitmap = dirty_i->dirty_segmap[type];//到相应类型中找受害段
 		p->max_search = dirty_i->nr_dirty[type];
-		p->ofs_unit = 1;
-	} else {
-		p->gc_mode = select_gc_type(sbi, gc_type);
-		p->ofs_unit = sbi->segs_per_sec;
-		if (__is_large_section(sbi)) {
-			p->dirty_bitmap = dirty_i->dirty_secmap;
+		p->ofs_unit = 1;// 一个段一个段的找
+	} else {// LFS模式
+		p->gc_mode = select_gc_type(sbi, gc_type);// 根据前后台gc和sysfs设置选择GC模式
+		p->ofs_unit = sbi->segs_per_sec;// 一个section一个section的找
+		if (__is_large_section(sbi)) {// 一个section有多个段
+			p->dirty_bitmap = dirty_i->dirty_secmap;//使用section位图
 			p->max_search = count_bits(p->dirty_bitmap,
 						0, MAIN_SECS(sbi));
 		} else {
-			p->dirty_bitmap = dirty_i->dirty_segmap[DIRTY];
+			p->dirty_bitmap = dirty_i->dirty_segmap[DIRTY];//使用segment位图，到所有段找受害段
 			p->max_search = dirty_i->nr_dirty[DIRTY];
 		}
 	}
@@ -229,6 +231,7 @@ static void select_policy(struct f2fs_sb_info *sbi, int gc_type,
 	/*
 	 * adjust candidates range, should select all dirty segments for
 	 * foreground GC and urgent GC cases.
+	 * 只有 FG_GC/GC_URGENT_HIGH/AT 的情况下，才能搜索全部的段
 	 */
 	if (gc_type != FG_GC &&
 			(sbi->gc_mode != GC_URGENT_HIGH) &&
@@ -237,6 +240,7 @@ static void select_policy(struct f2fs_sb_info *sbi, int gc_type,
 		p->max_search = sbi->max_victim_search;
 
 	/* let's select beginning hot/small space first in no_heap mode*/
+	// 配置查找起始位置
 	if (test_opt(sbi, NOHEAP) &&
 		(type == CURSEG_HOT_DATA || IS_NODESEG(type)))
 		p->offset = 0;
@@ -249,21 +253,22 @@ static unsigned int get_max_cost(struct f2fs_sb_info *sbi,
 {
 	/* SSR allocates in a segment unit */
 	if (p->alloc_mode == SSR)
-		return sbi->blocks_per_seg;
-	else if (p->alloc_mode == AT_SSR)
+		return sbi->blocks_per_seg;// SSR最大开销512
+	else if (p->alloc_mode == AT_SSR)// AT_SSR最大开销无限大
 		return UINT_MAX;
 
 	/* LFS */
 	if (p->gc_mode == GC_GREEDY)
-		return 2 * sbi->blocks_per_seg * p->ofs_unit;
+		return 2 * sbi->blocks_per_seg * p->ofs_unit;// greedy最大开销，读+写整个unit
 	else if (p->gc_mode == GC_CB)
-		return UINT_MAX;
+		return UINT_MAX;// CB最大开销无限大
 	else if (p->gc_mode == GC_AT)
-		return UINT_MAX;
+		return UINT_MAX;// AT最大开销无限大
 	else /* No other gc_mode */
 		return 0;
 }
 
+// 前台GC可以选择后台GC之前选择过的段，选择后，清除victim_secmap相应位
 static unsigned int check_bg_victims(struct f2fs_sb_info *sbi)
 {
 	struct dirty_seglist_info *dirty_i = DIRTY_I(sbi);
@@ -278,7 +283,7 @@ static unsigned int check_bg_victims(struct f2fs_sb_info *sbi)
 		if (sec_usage_check(sbi, secno))
 			continue;
 		clear_bit(secno, dirty_i->victim_secmap);
-		return GET_SEG_FROM_SEC(sbi, secno);
+		return GET_SEG_FROM_SEC(sbi, secno);// 返回后台GC选择过的sec首段
 	}
 	return NULL_SEGNO;
 }
@@ -297,10 +302,10 @@ static unsigned int get_cb_cost(struct f2fs_sb_info *sbi, unsigned int segno)
 
 	for (i = 0; i < usable_segs_per_sec; i++)
 		mtime += get_seg_entry(sbi, start + i)->mtime;
-	vblocks = get_valid_blocks(sbi, segno, true);
+	vblocks = get_valid_blocks(sbi, segno, true);// 获取有效块数
 
-	mtime = div_u64(mtime, usable_segs_per_sec);
-	vblocks = div_u64(vblocks, usable_segs_per_sec);
+	mtime = div_u64(mtime, usable_segs_per_sec);// section内段平均修改时间
+	vblocks = div_u64(vblocks, usable_segs_per_sec);// section内段平均有效块数
 
 	u = (vblocks * 100) >> sbi->log_blocks_per_seg;
 
@@ -311,11 +316,12 @@ static unsigned int get_cb_cost(struct f2fs_sb_info *sbi, unsigned int segno)
 		sit_i->max_mtime = mtime;
 	if (sit_i->max_mtime != sit_i->min_mtime)
 		age = 100 - div64_u64(100 * (mtime - sit_i->min_mtime),
-				sit_i->max_mtime - sit_i->min_mtime);
+				sit_i->max_mtime - sit_i->min_mtime);// 修改时间越早，age越大
 
-	return UINT_MAX - ((100 * (100 - u) * age) / (100 + u));
+	return UINT_MAX - ((100 * (100 - u) * age) / (100 + u));// age越大，有效块数越少，开销越小
 }
 
+// 计算GC开销
 static inline unsigned int get_gc_cost(struct f2fs_sb_info *sbi,
 			unsigned int segno, struct victim_sel_policy *p)
 {
@@ -332,6 +338,7 @@ static inline unsigned int get_gc_cost(struct f2fs_sb_info *sbi,
 	return 0;
 }
 
+// 计算位图中有多少个1
 static unsigned int count_bits(const unsigned long *addr,
 				unsigned int offset, unsigned int len)
 {
@@ -379,6 +386,7 @@ static void insert_victim_entry(struct f2fs_sb_info *sbi,
 	attach_victim_entry(sbi, mtime, segno, parent, p, left_most);
 }
 
+// 将满足条件的段，加入到候选名单中
 static void add_victim_entry(struct f2fs_sb_info *sbi,
 				struct victim_sel_policy *p, unsigned int segno)
 {
@@ -413,7 +421,7 @@ static void add_victim_entry(struct f2fs_sb_info *sbi,
 		sit_i->dirty_max_mtime = mtime;
 
 	/* don't choose young section as candidate */
-	if (sit_i->dirty_max_mtime - mtime < p->age_threshold)
+	if (sit_i->dirty_max_mtime - mtime < p->age_threshold)	//小于age_threshold的年轻段不会入选
 		return;
 
 	insert_victim_entry(sbi, mtime, segno);
@@ -431,6 +439,7 @@ static struct rb_node *lookup_central_victim(struct f2fs_sb_info *sbi,
 	return parent;
 }
 
+// (无效块占比 + age) 越大，迁移开销越小，同开销取较老的段
 static void atgc_lookup_victim(struct f2fs_sb_info *sbi,
 						struct victim_sel_policy *p)
 {
@@ -506,6 +515,7 @@ skip:
 /*
  * select candidates around source section in range of
  * [target - dirty_threshold, target + dirty_threshold]
+ * 找到有效块最多和p->age相近的段
  */
 static void atssr_lookup_victim(struct f2fs_sb_info *sbi,
 						struct victim_sel_policy *p)
@@ -531,7 +541,7 @@ static void atssr_lookup_victim(struct f2fs_sb_info *sbi,
 		return;
 	max_mtime += 1;
 next_stage:
-	node = lookup_central_victim(sbi, p);
+	node = lookup_central_victim(sbi, p);//找到接近age的段
 next_node:
 	re = rb_entry_safe(node, struct rb_entry, rb_node);
 	if (!re) {
@@ -557,7 +567,7 @@ next_node:
 	iter++;
 
 	age = max_mtime - abs(p->age - age);
-	cost = UINT_MAX - vblocks;
+	cost = UINT_MAX - vblocks;// 有效块越多，开销越小
 
 	if (cost < p->min_cost ||
 			(cost == p->min_cost && age > p->oldest_age)) {
@@ -568,18 +578,20 @@ next_node:
 skip_node:
 	if (iter < dirty_threshold) {
 		if (stage == 0)
-			node = rb_prev(node);
+			node = rb_prev(node);// 往左走dirty_threshold
 		else if (stage == 1)
-			node = rb_next(node);
+			node = rb_next(node);// 往右走dirty_threshold
 		goto next_node;
 	}
 skip_stage:
 	if (stage < 1) {
 		stage++;
 		iter = 0;
-		goto next_stage;
+		goto next_stage;// 走完左边，走右边
 	}
 }
+
+//找到目标段
 static void lookup_victim_by_age(struct f2fs_sb_info *sbi,
 						struct victim_sel_policy *p)
 {
@@ -587,9 +599,9 @@ static void lookup_victim_by_age(struct f2fs_sb_info *sbi,
 						&sbi->am.root, true));
 
 	if (p->gc_mode == GC_AT)
-		atgc_lookup_victim(sbi, p);
+		atgc_lookup_victim(sbi, p);// 到atgc_management中寻找用于AT_GC的段
 	else if (p->alloc_mode == AT_SSR)
-		atssr_lookup_victim(sbi, p);
+		atssr_lookup_victim(sbi, p);// 到atgc_management中寻找用于AT_SSR的段
 	else
 		f2fs_bug_on(sbi, 1);
 }
@@ -618,6 +630,9 @@ static void release_victim_entry(struct f2fs_sb_info *sbi)
  * and it does not remove it from dirty seglist.
  * When it is called from SSR segment selection, it finds a segment
  * which has minimum valid blocks and removes it from dirty seglist.
+ * 此方法仅在垃圾回收或者SSR模式分配段时使用
+ * GC时，此方法返回一个段，所选段不会从dirty seglist中删除
+ * SSR时，此方法返回一个段，所选段会从dirty seglist中删除
  */
 static int get_victim_by_default(struct f2fs_sb_info *sbi,
 			unsigned int *result, int gc_type, int type,
@@ -635,15 +650,15 @@ static int get_victim_by_default(struct f2fs_sb_info *sbi,
 	mutex_lock(&dirty_i->seglist_lock);
 	last_segment = MAIN_SECS(sbi) * sbi->segs_per_sec;
 
-	p.alloc_mode = alloc_mode;
-	p.age = age;
-	p.age_threshold = sbi->am.age_threshold;
+	p.alloc_mode = alloc_mode;// 分配模式
+	p.age = age;// 段修改时间
+	p.age_threshold = sbi->am.age_threshold;// 阈值
 
 retry:
-	select_policy(sbi, gc_type, type, &p);
+	select_policy(sbi, gc_type, type, &p);// 设置p的gc_mode，脏位图，搜索起始位置和最大搜索长度
 	p.min_segno = NULL_SEGNO;
 	p.oldest_age = 0;
-	p.min_cost = get_max_cost(sbi, &p);
+	p.min_cost = get_max_cost(sbi, &p);// 计算最大开销
 
 	is_atgc = (p.gc_mode == GC_AT || p.alloc_mode == AT_SSR);
 	nsearched = 0;
@@ -652,31 +667,31 @@ retry:
 		SIT_I(sbi)->dirty_min_mtime = ULLONG_MAX;
 
 	if (*result != NULL_SEGNO) {
-		if (!get_valid_blocks(sbi, *result, false)) {
+		if (!get_valid_blocks(sbi, *result, false)) {// 候选段有效块数为0，报错
 			ret = -ENODATA;
 			goto out;
 		}
 
-		if (sec_usage_check(sbi, GET_SEC_FROM_SEG(sbi, *result)))
+		if (sec_usage_check(sbi, GET_SEC_FROM_SEG(sbi, *result)))// section正在被使用，报错
 			ret = -EBUSY;
 		else
-			p.min_segno = *result;
+			p.min_segno = *result;// 找到最小开销段号
 		goto out;
 	}
 
 	ret = -ENODATA;
-	if (p.max_search == 0)
+	if (p.max_search == 0)// 最大搜索数为0
 		goto out;
 
-	if (__is_large_section(sbi) && p.alloc_mode == LFS) {
-		if (sbi->next_victim_seg[BG_GC] != NULL_SEGNO) {
+	if (__is_large_section(sbi) && p.alloc_mode == LFS) {// zbd
+		if (sbi->next_victim_seg[BG_GC] != NULL_SEGNO) {// sbi中已缓存后台GC victim段号
 			p.min_segno = sbi->next_victim_seg[BG_GC];
 			*result = p.min_segno;
 			sbi->next_victim_seg[BG_GC] = NULL_SEGNO;
 			goto got_result;
 		}
 		if (gc_type == FG_GC &&
-				sbi->next_victim_seg[FG_GC] != NULL_SEGNO) {
+				sbi->next_victim_seg[FG_GC] != NULL_SEGNO) {// sbi中已缓存前台GC victim段号
 			p.min_segno = sbi->next_victim_seg[FG_GC];
 			*result = p.min_segno;
 			sbi->next_victim_seg[FG_GC] = NULL_SEGNO;
@@ -684,9 +699,9 @@ retry:
 		}
 	}
 
-	last_victim = sm->last_victim[p.gc_mode];
+	last_victim = sm->last_victim[p.gc_mode];// 找到上一个受害者
 	if (p.alloc_mode == LFS && gc_type == FG_GC) {
-		p.min_segno = check_bg_victims(sbi);
+		p.min_segno = check_bg_victims(sbi);//前台GC可以用后台GC选择过的段
 		if (p.min_segno != NULL_SEGNO)
 			goto got_it;
 	}
@@ -698,21 +713,21 @@ retry:
 		dirty_bitmap = p.dirty_bitmap;
 		unit_no = find_next_bit(dirty_bitmap,
 				last_segment / p.ofs_unit,
-				p.offset / p.ofs_unit);
-		segno = unit_no * p.ofs_unit;
+				p.offset / p.ofs_unit);// 从offset开始，以p.ofs_unit为单位，找到下一个脏unit
+		segno = unit_no * p.ofs_unit;// unit换算成段号
 		if (segno >= last_segment) {
-			if (sm->last_victim[p.gc_mode]) {
+			if (sm->last_victim[p.gc_mode]) {//直到最大段号，发现还没找个一遍
 				last_segment =
 					sm->last_victim[p.gc_mode];
 				sm->last_victim[p.gc_mode] = 0;
-				p.offset = 0;
+				p.offset = 0;//从头再来
 				continue;
 			}
-			break;
+			break;// 找了一遍，没找到脏的 返回-ENODATA
 		}
 
-		p.offset = segno + p.ofs_unit;
-		nsearched++;
+		p.offset = segno + p.ofs_unit;// 找到了，偏移加到下一个unit
+		nsearched++;// 搜索次数加一
 
 #ifdef CONFIG_F2FS_CHECK_FS
 		/*
@@ -720,7 +735,7 @@ retry:
 		 * validity check failure during GC) to avoid endless GC loop in
 		 * such cases.
 		 */
-		if (test_bit(segno, sm->invalid_segmap))
+		if (test_bit(segno, sm->invalid_segmap))// 被GC排除的段号
 			goto next;
 #endif
 
@@ -737,23 +752,23 @@ retry:
 			goto next;
 
 		if (is_atgc) {
-			add_victim_entry(sbi, &p, segno);
+			add_victim_entry(sbi, &p, segno);// 如果是ATGC或AT_SSR，不计算开销，直接将段加入到候选者中，再搜索下一个
 			goto next;
 		}
 
-		cost = get_gc_cost(sbi, segno, &p);
+		cost = get_gc_cost(sbi, segno, &p);// 计算开销
 
-		if (p.min_cost > cost) {
+		if (p.min_cost > cost) {// 找到最小开销的段
 			p.min_segno = segno;
 			p.min_cost = cost;
 		}
 next:
-		if (nsearched >= p.max_search) {
+		if (nsearched >= p.max_search) {// 超过最大搜索次数
 			if (!sm->last_victim[p.gc_mode] && segno <= last_victim)
 				sm->last_victim[p.gc_mode] =
-					last_victim + p.ofs_unit;
+					last_victim + p.ofs_unit;// 如果经历了从头开始，last_victim设为下一个单元
 			else
-				sm->last_victim[p.gc_mode] = segno + p.ofs_unit;
+				sm->last_victim[p.gc_mode] = segno + p.ofs_unit;//否则设为最后一个脏段的下一个单元
 			sm->last_victim[p.gc_mode] %=
 				(MAIN_SECS(sbi) * sbi->segs_per_sec);
 			break;
@@ -762,26 +777,26 @@ next:
 
 	/* get victim for GC_AT/AT_SSR */
 	if (is_atgc) {
-		lookup_victim_by_age(sbi, &p);
+		lookup_victim_by_age(sbi, &p);// 如果ATGC或ATSSR，此时再利用AT算法计算开销，到atgc_management中寻找最优段
 		release_victim_entry(sbi);
 	}
 
 	if (is_atgc && p.min_segno == NULL_SEGNO &&
 			sm->elapsed_time < p.age_threshold) {
-		p.age_threshold = 0;
+		p.age_threshold = 0;// 没找到，将age_threshold设为0，重试
 		goto retry;
 	}
 
-	if (p.min_segno != NULL_SEGNO) {
+	if (p.min_segno != NULL_SEGNO) {// 找到了victim段
 got_it:
-		*result = (p.min_segno / p.ofs_unit) * p.ofs_unit;
+		*result = (p.min_segno / p.ofs_unit) * p.ofs_unit;// 段号保存再result中
 got_result:
 		if (p.alloc_mode == LFS) {
 			secno = GET_SEC_FROM_SEG(sbi, p.min_segno);
 			if (gc_type == FG_GC)
-				sbi->cur_victim_sec = secno;
+				sbi->cur_victim_sec = secno;// LFS下，前台GC，缓存当前victim section
 			else
-				set_bit(secno, dirty_i->victim_secmap);
+				set_bit(secno, dirty_i->victim_secmap);// LFS下，后台GC，设置victim_secmap位图
 		}
 		ret = 0;
 
@@ -888,8 +903,10 @@ next_step:
 			continue;
 
 		if (phase == 0) {
-			f2fs_ra_meta_pages(sbi, NAT_BLOCK_OFFSET(nid), 1,
-							META_NAT, true);
+			// f2fs_ra_meta_pages(sbi, NAT_BLOCK_OFFSET(nid), 1,
+			// 				META_NAT, true);
+			f2fs_ra_meta_pages_on_pm(sbi, NAT_BLOCK_OFFSET(nid), 1,
+							META_NAT);
 			continue;
 		}
 
@@ -913,6 +930,8 @@ next_step:
 			f2fs_put_page(node_page, 1);
 			continue;
 		}
+
+		f2fs_bug_on(sbi, ni.on_pm == 1);// 这里不能回收pm上的node page
 
 		if (ni.blk_addr != start_addr + off) {
 			f2fs_put_page(node_page, 1);
@@ -939,6 +958,8 @@ next_step:
  * blocks. If any node offsets, which point the other types of node blocks such
  * as indirect or double indirect node blocks, are given, it must be a caller's
  * bug.
+ * 返回node_ofs对应的direct node中的首页物理地址在文件中的偏移
+ * node_ofs必须是direct node在inode中的偏移，不能是indirect node
  */
 block_t f2fs_start_bidx_of_node(unsigned int node_ofs, struct inode *inode)
 {
@@ -1121,7 +1142,7 @@ static int move_data_block(struct inode *inode, block_t bidx,
 	int err = 0;
 	bool lfs_mode = f2fs_lfs_mode(fio.sbi);
 	int type = fio.sbi->am.atgc_enabled ?
-				CURSEG_ALL_DATA_ATGC : CURSEG_COLD_DATA;
+				CURSEG_ALL_DATA_ATGC : CURSEG_COLD_DATA;// 如果AT_GC开启了，就用CURSEG_ALL_DATA_ATGC分配迁移块
 
 	/* do not read out */
 	page = f2fs_grab_cache_page(inode->i_mapping, bidx, false);
@@ -1393,8 +1414,10 @@ next_step:
 			continue;
 
 		if (phase == 0) {
-			f2fs_ra_meta_pages(sbi, NAT_BLOCK_OFFSET(nid), 1,
-							META_NAT, true);
+			// f2fs_ra_meta_pages(sbi, NAT_BLOCK_OFFSET(nid), 1,
+			// 				META_NAT, true);
+			f2fs_ra_meta_pages_on_pm(sbi, NAT_BLOCK_OFFSET(nid), 1,
+							META_NAT);
 			continue;
 		}
 
@@ -1548,9 +1571,12 @@ static int do_garbage_collect(struct f2fs_sb_info *sbi,
 	sanity_check_seg_type(sbi, get_seg_entry(sbi, segno)->type);
 
 	/* readahead multi ssa blocks those have contiguous address */
-	if (__is_large_section(sbi))
-		f2fs_ra_meta_pages(sbi, GET_SUM_BLOCK(sbi, segno),
-					end_segno - segno, META_SSA, true);
+	if (__is_large_section(sbi)){
+		// f2fs_ra_meta_pages(sbi, GET_SUM_BLOCK(sbi, segno),
+		// 			end_segno - segno, META_SSA, true);
+		f2fs_ra_meta_pages_on_pm(sbi, GET_SUM_BLOCK(sbi, segno),
+					end_segno - segno, META_SSA);
+	}
 
 	/* reference all summary page */
 	while (segno < end_segno) {
@@ -1681,6 +1707,7 @@ gc_more:
 		 */
 		if (prefree_segments(sbi) &&
 				!is_sbi_flag_set(sbi, SBI_CP_DISABLED)) {
+			//f2fs_info(sbi, "gc first write checkpoint");
 			ret = f2fs_write_checkpoint(sbi, &cpc);
 			if (ret)
 				goto stop;
@@ -1732,8 +1759,10 @@ gc_more:
 			segno = NULL_SEGNO;
 			goto gc_more;
 		}
-		if (gc_type == FG_GC && !is_sbi_flag_set(sbi, SBI_CP_DISABLED))
+		if (gc_type == FG_GC && !is_sbi_flag_set(sbi, SBI_CP_DISABLED)){
+			//f2fs_info(sbi, "gc second write checkpoint");
 			ret = f2fs_write_checkpoint(sbi, &cpc);
+		}
 	}
 stop:
 	SIT_I(sbi)->last_victim[ALLOC_NEXT] = 0;
@@ -1795,6 +1824,7 @@ void f2fs_build_gc_manager(struct f2fs_sb_info *sbi)
 	sbi->gc_pin_file_threshold = DEF_GC_FAILED_PINNED_FILES;
 
 	/* give warm/cold data area from slower device */
+	// zbd会在slower device上放warm/cold data
 	if (f2fs_is_multi_device(sbi) && !__is_large_section(sbi))
 		SIT_I(sbi)->last_victim[ALLOC_NEXT] =
 				GET_SEGNO(sbi, FDEV(0).end_blk) + 1;
@@ -1852,6 +1882,7 @@ static int free_segment_range(struct f2fs_sb_info *sbi,
 	if (gc_only)
 		goto out;
 
+	//f2fs_info(sbi, "free_segment_range write checkpoint");
 	err = f2fs_write_checkpoint(sbi, &cpc);
 	if (err)
 		goto out;
@@ -2015,6 +2046,7 @@ int f2fs_resize_fs(struct f2fs_sb_info *sbi, __u64 block_count)
 	clear_sbi_flag(sbi, SBI_IS_RESIZEFS);
 	set_sbi_flag(sbi, SBI_IS_DIRTY);
 
+	//f2fs_info(sbi, "resize_fs write checkpoint");
 	err = f2fs_write_checkpoint(sbi, &cpc);
 	if (err) {
 		update_fs_metadata(sbi, secs);

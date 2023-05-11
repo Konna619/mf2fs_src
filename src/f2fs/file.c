@@ -4055,6 +4055,8 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct inode *inode = file_inode(file);
 	ssize_t ret;
 
+	// ktime_t start, diff;
+
 	if (unlikely(f2fs_cp_error(F2FS_I_SB(inode)))) {
 		ret = -EIO;
 		goto out;
@@ -4128,7 +4130,10 @@ out_err:
 			goto out;
 		}
 write:
+		// start = ktime_get();
 		ret = __generic_file_write_iter(iocb, from);
+		// diff = ktime_sub(ktime_get(), start);
+		// printk("diff time = %lldns\n", ktime_to_ns(diff));
 		clear_inode_flag(inode, FI_NO_PREALLOC);
 
 		/* if we couldn't write data, we should deallocate blocks. */

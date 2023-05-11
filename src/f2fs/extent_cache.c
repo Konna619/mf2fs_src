@@ -818,12 +818,13 @@ bool f2fs_lookup_extent_cache(struct inode *inode, pgoff_t pgofs,
 	return f2fs_lookup_extent_tree(inode, pgofs, ei);
 }
 
+// 更新对应inode的缓存
 void f2fs_update_extent_cache(struct dnode_of_data *dn)
 {
 	pgoff_t fofs;
 	block_t blkaddr;
 
-	if (!f2fs_may_extent_tree(dn->inode))
+	if (!f2fs_may_extent_tree(dn->inode))// inode该不该缓存
 		return;
 
 	if (dn->data_blkaddr == NEW_ADDR)

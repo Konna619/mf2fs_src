@@ -33,6 +33,8 @@ void f2fs_stop_checkpoint(struct f2fs_sb_info *sbi, bool end_io)
 
 /*
  * We guarantee no failure on the returned page.
+ * 仅获取meta页缓存中的页
+ * lock page并引用计数加一
  */
 struct page *f2fs_grab_meta_page(struct f2fs_sb_info *sbi, pgoff_t index)
 {
@@ -50,6 +52,7 @@ repeat:
 	return page;
 }
 
+// lock & ref
 static struct page *__get_meta_page(struct f2fs_sb_info *sbi, pgoff_t index,
 							bool is_meta)
 {
@@ -102,9 +105,73 @@ out:
 	return page;
 }
 
+// 将内存中的页读到src地址中
+int read_page_from_pm(void *src, struct page *dst, size_t size)
+{
+	int err;
+
+	err = __copy_to_user_inatomic(page_address(dst), src, size);
+	// printk("read pm page %llx\n", (u64)src);
+	if(err)
+		return err;
+	else{
+		SetPageUptodate(dst);
+		return 0;
+	}
+}
+
+// lock & ref
+static struct page *__get_meta_page_on_pm(struct f2fs_sb_info *sbi, pgoff_t index)
+{
+	struct address_space *mapping = META_MAPPING(sbi);
+	struct page *page;
+	void *src = PM_I(sbi)->p_va_start + ((unsigned long long)index<<PAGE_SHIFT);
+	int err;
+
+repeat:
+	page = f2fs_grab_cache_page(mapping, index, false);
+	if (!page) {
+		cond_resched();
+		goto repeat;
+	}
+
+	if (PageUptodate(page)){
+		goto out;
+	}
+
+	err = read_page_from_pm(src, page, PAGE_SIZE);
+	
+	if (err) {
+		f2fs_put_page(page, 1);
+		return ERR_PTR(err);
+	}
+
+	f2fs_update_iostat(sbi, FS_META_READ_IO, F2FS_BLKSIZE);
+
+	if (unlikely(page->mapping != mapping)) {
+		f2fs_put_page(page, 1);
+		goto repeat;
+	}
+
+	if (unlikely(!PageUptodate(page))) {
+		f2fs_put_page(page, 1);
+		return ERR_PTR(-EIO);
+	}
+out:
+	return page;
+}
+
+// 有可能读ssd
+// lock page并引用计数加一
 struct page *f2fs_get_meta_page(struct f2fs_sb_info *sbi, pgoff_t index)
 {
 	return __get_meta_page(sbi, index, true);
+}
+
+// konna 从pm中读，lock page并引用计数加一
+struct page *f2fs_get_meta_page_on_pm(struct f2fs_sb_info *sbi, pgoff_t index)
+{
+	return __get_meta_page_on_pm(sbi, index);
 }
 
 struct page *f2fs_get_meta_page_retry(struct f2fs_sb_info *sbi, pgoff_t index)
@@ -123,7 +190,31 @@ retry:
 	return page;
 }
 
+// konna
+// 用于替换get_sum_page中的f2fs_get_meta_page_retry
+// lock & ref
+struct page *f2fs_get_meta_page_retry_on_pm(struct f2fs_sb_info *sbi, pgoff_t index)
+{
+	struct page *page;
+	int count = 0;
+
+retry:
+	page = __get_meta_page_on_pm(sbi, index);
+	if (IS_ERR(page)) {
+		if (PTR_ERR(page) == -EIO &&
+				++count <= DEFAULT_RETRY_IO_COUNT)
+			goto retry;
+		f2fs_stop_checkpoint(sbi, false);
+	}
+	return page;
+}
+
 /* for POR only */
+// lock & ref
+// 该函数用于恢复当前node段的summary block，因为cp中可能没有node段的summary，会用meta的页缓存读node page
+// 另外还用于fsync的崩溃恢复：
+//	但nvm上的node page会影响该函数的正确性
+// TODO : fix
 struct page *f2fs_get_tmp_page(struct f2fs_sb_info *sbi, pgoff_t index)
 {
 	return __get_meta_page(sbi, index, false);
@@ -279,6 +370,74 @@ out:
 	return blkno - start;
 }
 
+/*
+ * konna
+ * 用于替换f2fs_ra_meta_pages预读函数，预读PM上的数据
+ * no lock & no ref
+ */
+int f2fs_ra_meta_pages_on_pm(struct f2fs_sb_info *sbi, block_t start, int nrpages,
+							int type)
+{
+	struct page *page;
+	void *p_va_start = PM_I(sbi)->p_va_start;
+	void *src;
+	block_t blkno = start;
+	block_t offset;
+	int err;
+
+	for (; nrpages-- > 0; blkno++) {
+
+		if (!f2fs_is_valid_blkaddr(sbi, blkno, type))
+			goto out;
+
+		switch (type) {
+		case META_NAT:
+			if (unlikely(blkno >=
+					NAT_BLOCK_OFFSET(NM_I(sbi)->max_nid)))
+				blkno = 0;
+			/* get nat block addr */
+			offset = current_nat_addr(sbi,
+					blkno * NAT_ENTRY_PER_BLOCK);
+			src = p_va_start + ((u64)offset<<PAGE_SHIFT);
+			break;
+		case META_SIT:
+			if (unlikely(blkno >= TOTAL_SEGS(sbi)))
+				goto out;
+			/* get sit block addr */
+			offset = current_sit_addr(sbi,
+					blkno * SIT_ENTRY_PER_BLOCK);
+			src = p_va_start + ((u64)offset<<PAGE_SHIFT);
+			break;
+		case META_SSA:
+		case META_CP:
+		case META_POR:
+			offset = blkno;
+			src = p_va_start + ((u64)offset<<PAGE_SHIFT);
+			break;
+		default:
+			BUG();
+		}
+
+		page = f2fs_grab_cache_page(META_MAPPING(sbi),
+						offset, false);
+		if (!page)
+			continue;
+		if (PageUptodate(page)) {
+			f2fs_put_page(page, 1);
+			continue;
+		}
+
+		err = read_page_from_pm(src, page, PAGE_SIZE);
+
+		f2fs_put_page(page, 1);
+
+		if (!err)
+			f2fs_update_iostat(sbi, FS_META_READ_IO, F2FS_BLKSIZE);
+	}
+out:
+	return blkno - start;
+}
+
 void f2fs_ra_meta_pages_cond(struct f2fs_sb_info *sbi, pgoff_t index)
 {
 	struct page *page;
@@ -364,6 +523,50 @@ skip_write:
 	return 0;
 }
 
+// write referenced page in page cache to pm
+// 调用该函数前应当lock & ref
+static void write_page_cache_to_pm(struct page *src, void *dst, size_t size)
+{
+	if(__copy_from_user_inatomic(dst, page_address(src), size)){
+		WARN_ON(1);
+	}
+	//printk("page ref : %d\n", page_ref_count(src));
+	
+	if(PageDirty(src)){
+		ClearPageDirty(src);
+		WARN_ON(1);
+	}
+}
+
+// konna
+// 写完后应当将sum page引用计数减一
+static void f2fs_sync_sum_pages_on_pm(struct f2fs_sb_info *sbi)
+{
+	struct sit_info *sit_i = SIT_I(sbi);
+	unsigned long *pm_bitmap = sit_i->pm_summary_bitmap;
+	void *pm_va_start = PM_I(sbi)->p_va_start;
+	void *sum_page_va;
+	struct page *page;
+	block_t pm_offset; 
+	int segno;
+
+	down_write(&sit_i->sentry_lock);
+
+	for_each_set_bit(segno, pm_bitmap, TOTAL_SEGS(sbi)){
+		pm_offset = GET_SUM_BLOCK(sbi, segno);
+		// page = f2fs_grab_meta_page(sbi, pm_offset);
+		page = f2fs_grab_cache_page(META_MAPPING(sbi), pm_offset, false);
+		sum_page_va = pm_va_start + ((u64)pm_offset << PAGE_SHIFT);
+
+		write_page_cache_to_pm(page, sum_page_va, PAGE_SIZE);
+		f2fs_put_page(page, 1);
+		put_page(page);
+		clear_bit(segno, pm_bitmap);
+	}
+
+	up_write(&sit_i->sentry_lock);
+}
+
 long f2fs_sync_meta_pages(struct f2fs_sb_info *sbi, enum page_type type,
 				long nr_to_write, enum iostat_type io_type)
 {
@@ -377,6 +580,7 @@ long f2fs_sync_meta_pages(struct f2fs_sb_info *sbi, enum page_type type,
 	};
 	struct blk_plug plug;
 
+	f2fs_sync_sum_pages_on_pm(sbi);//konna
 	pagevec_init(&pvec);
 
 	blk_start_plug(&plug);
@@ -1164,6 +1368,7 @@ static bool __need_flush_quota(struct f2fs_sb_info *sbi)
 
 /*
  * Freeze all the FS-operations for checkpoint.
+ * 会下刷一些数据：inline_data pages,quotas,dirty dentry pages,dirty nodes pages
  */
 static int block_operations(struct f2fs_sb_info *sbi)
 {
@@ -1401,7 +1606,7 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	int err;
 
 	/* Flush all the NAT/SIT pages */
-	f2fs_sync_meta_pages(sbi, META, LONG_MAX, FS_CP_META_IO);
+	f2fs_sync_meta_pages(sbi, META, LONG_MAX, FS_CP_META_IO);// 下刷所有脏的nat，sit块和sum块
 
 	/* start to update checkpoint, cp ver is already updated previously */
 	ckpt->elapsed_time = cpu_to_le64(get_mtime(sbi, true));
@@ -1460,7 +1665,7 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	start_blk = __start_cp_next_addr(sbi);
 
 	/* write nat bits */
-	if (enabled_nat_bits(sbi, cpc)) {
+	if (enabled_nat_bits(sbi, cpc)) {//仅在umount时写nat bits
 		__u64 cp_ver = cur_cp_version(ckpt);
 		block_t blk;
 
@@ -1557,6 +1762,14 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	return unlikely(f2fs_cp_error(sbi)) ? -EIO : 0;
 }
 
+// konna
+static int f2fs_flush_node_page_bitmap(struct f2fs_sb_info *sbi)
+{
+	struct f2fs_nm_info *nm_i = NM_I(sbi);
+
+	return __copy_from_user_inatomic_nocache(PM_I(sbi)->p_ndoe_page_bitmap_va_start, nm_i->node_page_bitmap_on_pm, nm_i->node_page_bitmap_on_pm_size);
+}
+
 int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 {
 	struct f2fs_checkpoint *ckpt = F2FS_CKPT(sbi);
@@ -1625,10 +1838,19 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 
 	f2fs_flush_sit_entries(sbi, cpc);
 
+	/* konna : write node page bitmap to pm */
+	if((cpc->reason & CP_UMOUNT)){
+		err = f2fs_flush_node_page_bitmap(sbi);
+		if(err){
+			f2fs_err(sbi, "flush node page bitmap error!");
+			goto stop;
+		} 
+	}
+
 	/* save inmem log status */
 	f2fs_save_inmem_curseg(sbi);
 
-	err = do_checkpoint(sbi, cpc);
+	err = do_checkpoint(sbi, cpc);// 下刷flush
 	if (err)
 		f2fs_release_discard_addrs(sbi);
 	else

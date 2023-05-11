@@ -15,6 +15,7 @@
 #include "xattr.h"
 #include <trace/events/f2fs.h>
 
+// 看目录文件有多少个块
 static unsigned long dir_blocks(struct inode *inode)
 {
 	return ((unsigned long long) (i_size_read(inode) + PAGE_SIZE - 1))
@@ -946,12 +947,12 @@ int f2fs_fill_dentries(struct dir_context *ctx, struct f2fs_dentry_ptr *d,
 		blk_start_plug(&plug);
 
 	while (bit_pos < d->max) {
-		bit_pos = find_next_bit_le(d->bitmap, d->max, bit_pos);
+		bit_pos = find_next_bit_le(d->bitmap, d->max, bit_pos);// 找到下一个有效的目录项
 		if (bit_pos >= d->max)
 			break;
 
-		de = &d->dentry[bit_pos];
-		if (de->name_len == 0) {
+		de = &d->dentry[bit_pos];// 遍历目录页中每一个dentry
+		if (de->name_len == 0) {// 目录项名称长度为0，表示出错
 			bit_pos++;
 			ctx->pos = start_pos + bit_pos;
 			printk_ratelimited(
@@ -968,9 +969,9 @@ int f2fs_fill_dentries(struct dir_context *ctx, struct f2fs_dentry_ptr *d,
 		de_name.len = le16_to_cpu(de->name_len);
 
 		/* check memory boundary before moving forward */
-		bit_pos += GET_DENTRY_SLOTS(le16_to_cpu(de->name_len));
+		bit_pos += GET_DENTRY_SLOTS(le16_to_cpu(de->name_len));// 一个目录项文件名占多少个8字节，就跳过多少个dentry
 		if (unlikely(bit_pos > d->max ||
-				le16_to_cpu(de->name_len) > F2FS_NAME_LEN)) {
+				le16_to_cpu(de->name_len) > F2FS_NAME_LEN)) {// f2fs文件名最大255字节
 			f2fs_warn(sbi, "%s: corrupted namelen=%d, run fsck to fix.",
 				  __func__, le16_to_cpu(de->name_len));
 			set_sbi_flag(sbi, SBI_NEED_FSCK);
@@ -998,7 +999,7 @@ int f2fs_fill_dentries(struct dir_context *ctx, struct f2fs_dentry_ptr *d,
 		}
 
 		if (readdir_ra)
-			f2fs_ra_node_page(sbi, le32_to_cpu(de->ino));
+			f2fs_ra_node_page(sbi, le32_to_cpu(de->ino));//预读目录项对应文件的inode页
 
 		ctx->pos = start_pos + bit_pos;
 	}
@@ -1011,12 +1012,12 @@ out:
 static int f2fs_readdir(struct file *file, struct dir_context *ctx)
 {
 	struct inode *inode = file_inode(file);
-	unsigned long npages = dir_blocks(inode);
+	unsigned long npages = dir_blocks(inode);//计算目录有多少块
 	struct f2fs_dentry_block *dentry_blk = NULL;
 	struct page *dentry_page = NULL;
 	struct file_ra_state *ra = &file->f_ra;
 	loff_t start_pos = ctx->pos;
-	unsigned int n = ((unsigned long)ctx->pos / NR_DENTRY_IN_BLOCK);
+	unsigned int n = ((unsigned long)ctx->pos / NR_DENTRY_IN_BLOCK);//从上下文ctx的偏移中开始
 	struct f2fs_dentry_ptr d;
 	struct fscrypt_str fstr = FSTR_INIT(NULL, 0);
 	int err = 0;
@@ -1050,7 +1051,7 @@ static int f2fs_readdir(struct file *file, struct dir_context *ctx)
 			page_cache_sync_readahead(inode->i_mapping, ra, file, n,
 				min(npages - n, (pgoff_t)MAX_DIR_RA_PAGES));
 
-		dentry_page = f2fs_find_data_page(inode, n);
+		dentry_page = f2fs_find_data_page(inode, n);// 获得目录的第n页
 		if (IS_ERR(dentry_page)) {
 			err = PTR_ERR(dentry_page);
 			if (err == -ENOENT) {
@@ -1063,10 +1064,10 @@ static int f2fs_readdir(struct file *file, struct dir_context *ctx)
 
 		dentry_blk = page_address(dentry_page);
 
-		make_dentry_ptr_block(inode, &d, dentry_blk);
+		make_dentry_ptr_block(inode, &d, dentry_blk);// 获目录第n页的元数据：dentry位图，dentry，文件名
 
 		err = f2fs_fill_dentries(ctx, &d,
-				n * NR_DENTRY_IN_BLOCK, &fstr);
+				n * NR_DENTRY_IN_BLOCK, &fstr);// 填充
 		if (err) {
 			f2fs_put_page(dentry_page, 0);
 			break;

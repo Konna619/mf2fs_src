@@ -327,6 +327,10 @@ static int recover_inode(struct inode *inode, struct page *page)
 	return 0;
 }
 
+// 找到当前CURSEG_WARM_NODE段的下一个页，看是否需要恢复，如果需要恢复，就将该页对应文件加入到链表中，再通过next_blkaddr_of_node找下一个node页
+// 但是这里是从CURSEG_WARM_NODE段中找下一个node page，最后一次fsync后写在nvm上的node page并不会记住
+// 因此，这里崩溃恢复时需要到nvm上找页？没错，而且这里的起始blkaddr是指ssd上node段的下一个空闲地址
+// node page的footer中有nid，可以判断一下位图
 static int find_fsync_dnodes(struct f2fs_sb_info *sbi, struct list_head *head,
 				bool check_only)
 {
@@ -596,8 +600,8 @@ retry_dn:
 	for (; start < end; start++, dn.ofs_in_node++) {
 		block_t src, dest;
 
-		src = f2fs_data_blkaddr(&dn);
-		dest = data_blkaddr(dn.inode, page, dn.ofs_in_node);
+		src = f2fs_data_blkaddr(&dn);// cp时，文件LBA对应的物理块地址
+		dest = data_blkaddr(dn.inode, page, dn.ofs_in_node);// cp到崩溃之间，文件LBA对应的物理块地址
 
 		if (__is_valid_data_blkaddr(src) &&
 			!f2fs_is_valid_blkaddr(sbi, src, META_POR)) {
@@ -624,7 +628,7 @@ retry_dn:
 		if (!file_keep_isize(inode) &&
 			(i_size_read(inode) <= ((loff_t)start << PAGE_SHIFT)))
 			f2fs_i_size_write(inode,
-				(loff_t)(start + 1) << PAGE_SHIFT);
+				(loff_t)(start + 1) << PAGE_SHIFT);// 修改文件size
 
 		/*
 		 * dest is reserved block, invalidate src block
@@ -852,6 +856,7 @@ skip:
 			struct cp_control cpc = {
 				.reason = CP_RECOVERY,
 			};
+			//f2fs_info(sbi, "recover_fsync_data write checkpoint");
 			err = f2fs_write_checkpoint(sbi, &cpc);
 		}
 	}

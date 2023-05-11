@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+
 /*
  * fs/f2fs/super.c
  *
@@ -32,11 +33,13 @@
 #include "xattr.h"
 #include "gc.h"
 #include "trace.h"
+#include "balloc.h"			//konna
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/f2fs.h>
 
 static struct kmem_cache *f2fs_inode_cachep;
+static struct kmem_cache *f2fs_rangenode_cachep;	//konna
 
 #ifdef CONFIG_F2FS_FAULT_INJECTION
 
@@ -147,6 +150,7 @@ enum {
 	Opt_compress_log_size,
 	Opt_compress_extension,
 	Opt_atgc,
+	Opt_pmem, //konna
 	Opt_err,
 };
 
@@ -215,6 +219,7 @@ static match_table_t f2fs_tokens = {
 	{Opt_compress_log_size, "compress_log_size=%u"},
 	{Opt_compress_extension, "compress_extension=%s"},
 	{Opt_atgc, "atgc"},
+	{Opt_pmem, "pmem=%s"}, //konna
 	{Opt_err, NULL},
 };
 
@@ -944,6 +949,22 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 		case Opt_atgc:
 			set_opt(sbi, ATGC);
 			break;
+		/* konna */
+		case Opt_pmem:
+			name = match_strdup(&args[0]);
+			if (!name)
+				return -ENOMEM;
+			if(strlen(name)==0){
+				f2fs_err(sbi, "invalid pmem path");
+				kfree(name);
+				return -EINVAL;
+			}
+			f2fs_info(sbi, "pmem path : %s", name);
+			strcpy(sbi->pm_info.device_path, name);
+			set_opt(sbi, PMEM);
+			kfree(name);
+			break;
+		/* konna */
 		default:
 			f2fs_err(sbi, "Unrecognized mount option \"%s\" or missing value",
 				 p);
@@ -974,6 +995,7 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 	 * The BLKZONED feature indicates that the drive was formatted with
 	 * zone alignment optimization. This is optional for host-aware
 	 * devices, but mandatory for host-managed zoned block devices.
+	 * konna 此处判断系统是否支持zbd
 	 */
 #ifndef CONFIG_BLK_DEV_ZONED
 	if (f2fs_sb_has_blkzoned(sbi)) {
@@ -1025,6 +1047,7 @@ static int parse_options(struct super_block *sb, char *options, bool is_remount)
 	return 0;
 }
 
+// 建立一个f2fs indoe内存结构
 static struct inode *f2fs_alloc_inode(struct super_block *sb)
 {
 	struct f2fs_inode_info *fi;
@@ -1208,6 +1231,27 @@ static void destroy_device_list(struct f2fs_sb_info *sbi)
 	kvfree(sbi->devs);
 }
 
+/* konna 释放pmem_info*/
+static void f2fs_put_pm_info(struct f2fs_sb_info *sbi)
+{
+	put_dax(sbi->pm_info.p_dax_dev);
+	blkdev_put(sbi->pm_info.p_bdev, sbi->sb->s_mode);
+}
+
+/* konna 下刷pm_super*/
+static int f2fs_flush_pm_super(struct f2fs_sb_info *sbi)
+{
+	PM_S(sbi)->valid_node_blk_count = sbi->free_list->alloc_node_pages;
+
+	return __copy_from_user_inatomic(sbi->pm_info.p_super_va_start, &sbi->pm_info.p_fps, sizeof(struct f2fs_pm_super));
+}
+
+/* konna 下刷空闲块位图*/
+static int f2fs_flush_pm_free_blocks_bitmap(struct f2fs_sb_info *sbi)
+{
+	return __copy_from_user_inatomic(PM_I(sbi)->p_free_blocks_bitmap_va_start, sbi->free_list->free_blocks_bitmap, (sbi->free_list->free_block_bitmap_pages<<PAGE_SHIFT));
+}
+
 static void f2fs_put_super(struct super_block *sb)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -1232,6 +1276,7 @@ static void f2fs_put_super(struct super_block *sb)
 		struct cp_control cpc = {
 			.reason = CP_UMOUNT,
 		};
+		//f2fs_info(sbi, "put_super first write checkpoint");
 		f2fs_write_checkpoint(sbi, &cpc);
 	}
 
@@ -1243,6 +1288,7 @@ static void f2fs_put_super(struct super_block *sb)
 		struct cp_control cpc = {
 			.reason = CP_UMOUNT | CP_TRIMMED,
 		};
+		//f2fs_info(sbi, "put_super second write checkpoint");
 		f2fs_write_checkpoint(sbi, &cpc);
 	}
 
@@ -1262,7 +1308,7 @@ static void f2fs_put_super(struct super_block *sb)
 
 	f2fs_bug_on(sbi, sbi->fsync_node_num);
 
-	iput(sbi->node_inode);
+	iput(sbi->node_inode);	//这里会调用fsync_node_pages
 	sbi->node_inode = NULL;
 
 	iput(sbi->meta_inode);
@@ -1302,8 +1348,28 @@ static void f2fs_put_super(struct super_block *sb)
 #ifdef CONFIG_UNICODE
 	utf8_unload(sb->s_encoding);
 #endif
+	if(test_opt(sbi, PMEM)){//konna
+		f2fs_flush_pm_super(sbi);
+		f2fs_flush_pm_free_blocks_bitmap(sbi);
+		f2fs_destroy_range_nodes(sbi);
+		f2fs_delete_free_lists(sbi);
+		f2fs_put_pm_info(sbi);
+	}	
 	kfree(sbi);
 }
+
+/* konna */
+struct f2fs_range_node *f2fs_alloc_range_node(void){
+    struct f2fs_range_node *p;
+
+    p = (struct f2fs_range_node *)kmem_cache_zalloc(f2fs_rangenode_cachep, GFP_NOFS);
+    return p;
+}
+
+void f2fs_free_range_node(struct f2fs_range_node *node){
+    kmem_cache_free(f2fs_rangenode_cachep, node);
+}
+/* konna */
 
 int f2fs_sync_fs(struct super_block *sb, int sync)
 {
@@ -1326,6 +1392,7 @@ int f2fs_sync_fs(struct super_block *sb, int sync)
 		cpc.reason = __get_cp_reason(sbi);
 
 		down_write(&sbi->gc_lock);
+		//f2fs_info(sbi, "sync_fs write checkpoint");
 		err = f2fs_write_checkpoint(sbi, &cpc);
 		up_write(&sbi->gc_lock);
 	}
@@ -1687,7 +1754,7 @@ static void default_options(struct f2fs_sb_info *sbi)
 	set_opt(sbi, FLUSH_MERGE);
 	set_opt(sbi, DISCARD);
 	if (f2fs_sb_has_blkzoned(sbi))
-		F2FS_OPTION(sbi).fs_mode = FS_MODE_LFS;
+		F2FS_OPTION(sbi).fs_mode = FS_MODE_LFS;//konna zbd只能用LFS模式
 	else
 		F2FS_OPTION(sbi).fs_mode = FS_MODE_ADAPTIVE;
 
@@ -1747,6 +1814,7 @@ static int f2fs_disable_checkpoint(struct f2fs_sb_info *sbi)
 	down_write(&sbi->gc_lock);
 	cpc.reason = CP_PAUSE;
 	set_sbi_flag(sbi, SBI_CP_DISABLED);
+	//f2fs_info(sbi, "disable_checkpoint write checkpoint");
 	err = f2fs_write_checkpoint(sbi, &cpc);
 	if (err)
 		goto out_unlock;
@@ -1771,6 +1839,7 @@ static void f2fs_enable_checkpoint(struct f2fs_sb_info *sbi)
 	set_sbi_flag(sbi, SBI_IS_DIRTY);
 	up_write(&sbi->gc_lock);
 
+	//f2fs_info(sbi, "f2fs_enable_checkpoint f2fs sync fs");
 	f2fs_sync_fs(sbi->sb, 1);
 }
 
@@ -1909,6 +1978,7 @@ static int f2fs_remount(struct super_block *sb, int *flags, char *data)
 
 		set_sbi_flag(sbi, SBI_IS_DIRTY);
 		set_sbi_flag(sbi, SBI_IS_CLOSE);
+		//f2fs_info(sbi, "f2fs_remount f2fs sync fs");
 		f2fs_sync_fs(sb, 1);
 		clear_sbi_flag(sbi, SBI_IS_CLOSE);
 	}
@@ -2670,6 +2740,14 @@ static inline bool sanity_check_area_boundary(struct f2fs_sb_info *sbi,
 	u64 seg_end_blkaddr = segment0_blkaddr +
 				(segment_count << log_blocks_per_seg);
 
+	/* konna */
+	f2fs_info(sbi, "segment0_blkaddr: %u", segment0_blkaddr);
+	f2fs_info(sbi, "cp_blkaddr: %u", cp_blkaddr);
+	f2fs_info(sbi, "sit_blkaddr: %u", sit_blkaddr);
+	f2fs_info(sbi, "nat_blkaddr: %u", nat_blkaddr);
+	f2fs_info(sbi, "ssa_blkaddr: %u", ssa_blkaddr);
+	f2fs_info(sbi, "main_blkaddr: %u", main_blkaddr);
+
 	if (segment0_blkaddr != cp_blkaddr) {
 		f2fs_info(sbi, "Mismatch start address, segment0(%u) cp_blkaddr(%u)",
 			  segment0_blkaddr, cp_blkaddr);
@@ -3071,6 +3149,9 @@ static void init_sb_info(struct f2fs_sb_info *sbi)
 	sbi->total_node_count =
 		(le32_to_cpu(raw_super->segment_count_nat) / 2)
 			* sbi->blocks_per_seg * NAT_ENTRY_PER_BLOCK;
+	f2fs_info(sbi, "total sections = %d ",sbi->total_sections);
+	f2fs_info(sbi, "segs per sec = %d ",sbi->segs_per_sec);
+    f2fs_info(sbi, "secs per zone = %d ",sbi->secs_per_zone);
 	sbi->root_ino_num = le32_to_cpu(raw_super->root_ino);
 	sbi->node_ino_num = le32_to_cpu(raw_super->node_ino);
 	sbi->meta_ino_num = le32_to_cpu(raw_super->meta_ino);
@@ -3162,6 +3243,7 @@ static int init_blkz_info(struct f2fs_sb_info *sbi, int devi)
 				SECTOR_TO_BLOCK(bdev_zone_sectors(bdev)))
 		return -EINVAL;
 	sbi->blocks_per_blkz = SECTOR_TO_BLOCK(bdev_zone_sectors(bdev));
+	f2fs_info(sbi, "blocks per zone : %u", sbi->blocks_per_blkz);//konna
 	if (sbi->log_blocks_per_blkz && sbi->log_blocks_per_blkz !=
 				__ilog2_u32(sbi->blocks_per_blkz))
 		return -EINVAL;
@@ -3170,7 +3252,7 @@ static int init_blkz_info(struct f2fs_sb_info *sbi, int devi)
 					sbi->log_blocks_per_blkz;
 	if (nr_sectors & (bdev_zone_sectors(bdev) - 1))
 		FDEV(devi).nr_blkz++;
-
+	f2fs_info(sbi, "number of zones : %u", FDEV(devi).nr_blkz);//konna
 	FDEV(devi).blkz_seq = f2fs_kvzalloc(sbi,
 					BITS_TO_LONGS(FDEV(devi).nr_blkz)
 					* sizeof(unsigned long),
@@ -3193,6 +3275,7 @@ static int init_blkz_info(struct f2fs_sb_info *sbi, int devi)
 	if (ret < 0)
 		return ret;
 
+	f2fs_info(sbi, "capacity of zone in blocks : %u", FDEV(devi).zone_capacity_blocks[0]);//konna
 	if (!rep_zone_arg.zone_cap_mismatch) {
 		kfree(FDEV(devi).zone_capacity_blocks);
 		FDEV(devi).zone_capacity_blocks = NULL;
@@ -3307,14 +3390,18 @@ static int f2fs_scan_devices(struct f2fs_sb_info *sbi)
 
 	/* Initialize single device information */
 	if (!RDEV(0).path[0]) {
-		if (!bdev_is_zoned(sbi->sb->s_bdev))
+		if (!bdev_is_zoned(sbi->sb->s_bdev)){	//konna
+			f2fs_info(sbi, "only one non-zbd : %s", sbi->sb->s_bdev->bd_bdi->dev_name); //konna
 			return 0;
+		}
+			
 		max_devices = 1;
 	}
 
 	/*
 	 * Initialize multiple devices information, or single
 	 * zoned block device information.
+	 * 仅仅在多设备，或单个zbd时需要初始化sbi->dev数组
 	 */
 	sbi->devs = f2fs_kzalloc(sbi,
 				 array_size(max_devices,
@@ -3329,10 +3416,11 @@ static int f2fs_scan_devices(struct f2fs_sb_info *sbi)
 			break;
 
 		if (max_devices == 1) {
-			/* Single zoned block device mount */
+			/* Single zoned block device mount //只有一个mount时的设备，也是zbd设备 */
 			FDEV(0).bdev =
 				blkdev_get_by_dev(sbi->sb->s_bdev->bd_dev,
 					sbi->sb->s_mode, sbi->sb->s_type);
+			f2fs_info(sbi, "only one zbd : %s", sbi->sb->s_bdev->bd_bdi->dev_name); //konna
 		} else {
 			/* Multi-device mount */
 			memcpy(FDEV(i).path, RDEV(i).path, MAX_PATH_LEN);
@@ -3367,6 +3455,7 @@ static int f2fs_scan_devices(struct f2fs_sb_info *sbi)
 		}
 		if (bdev_zoned_model(FDEV(i).bdev) != BLK_ZONED_NONE) {
 			if (init_blkz_info(sbi, i)) {
+				/* konna 初始化f2fs_dev_info中的zone数量，zone位图，zone的capacity */
 				f2fs_err(sbi, "Failed to initialize F2FS blkzone information");
 				return -EINVAL;
 			}
@@ -3452,6 +3541,120 @@ static void f2fs_tuning_parameters(struct f2fs_sb_info *sbi)
 	sbi->readdir_ra = 1;
 }
 
+/* konna 获取PM设备信息 */
+static int f2fs_get_pm_info(struct f2fs_sb_info *sbi)
+{
+	void *virt_addr = NULL;
+	struct dax_device *dax_dev;
+	struct block_device *bdev;
+	pfn_t __pfn_t;
+	unsigned long size;
+	struct f2fs_pm_info *pi = &sbi->pm_info;
+
+	bdev = blkdev_get_by_path(pi->device_path, sbi->sb->s_mode, sbi->sb->s_type);
+	if(!bdev){
+		f2fs_warn(sbi, "Can not find block device : %s", sbi->pm_info.device_path);
+		goto no_bdev;
+	}
+
+	dax_dev = fs_dax_get_by_bdev(bdev);
+	if(!dax_dev){
+		f2fs_warn(sbi, "Not pm device : %s", pi->device_path);
+		goto no_dax;
+	}
+
+	size = dax_direct_access(dax_dev, 0, LONG_MAX/PAGE_SIZE, &virt_addr, &__pfn_t) * PAGE_SIZE;
+	if(size <= 0 || !virt_addr){
+		f2fs_warn(sbi, "PM access failed!");
+		goto no_access;
+	}
+
+	pi->p_bdev = bdev;
+	pi->p_dax_dev = dax_dev;
+	pi->p_size = size;
+	pi->p_va_start = virt_addr;
+	pi->p_pa_start = pfn_t_to_pfn(__pfn_t) << PAGE_SHIFT;
+	f2fs_info(sbi, "Mount PM device: %s, size: %lu bytes, start va in kernel: %llx, start pa: %llu",
+					pi->device_path,
+					pi->p_size,
+					(u64)pi->p_va_start,
+					pi->p_pa_start);
+
+	return 0;
+
+no_access:
+	put_dax(dax_dev);
+no_dax:
+	blkdev_put(bdev, sbi->sb->s_mode);
+no_bdev:
+	clear_opt(sbi, PMEM);
+	return -ENODEV;
+
+}
+
+// konnatest
+static void test(struct f2fs_sb_info *sbi){
+	// struct seg_entry *se;
+	// unsigned int segno, offset;
+	// bool exist;
+
+	// segno = GET_SEGNO(sbi, blkaddr);
+	// offset = GET_BLKOFF_FROM_SEG0(sbi, blkaddr);
+	// se = get_seg_entry(sbi, segno);
+	// exist = f2fs_test_bit(offset, se->cur_valid_map);
+	// if(!exist){
+	// 	f2fs_err(sbi, "after build sm, error blkaddr:%u, sit bitmap:%d",
+	// 		 blkaddr, exist);
+	// }
+	// f2fs_err(sbi, "after build sm, not error blkaddr:%u, sit bitmap:%d",
+	// 		 blkaddr, exist);
+
+	f2fs_info(sbi, "SIT_ENTRY_PER_BLOCK : %lu",SIT_ENTRY_PER_BLOCK);
+	f2fs_info(sbi, "NAT_ENTRY_PER_BLOCK : %lu",NAT_ENTRY_PER_BLOCK);
+
+	return;
+}
+
+//konna
+static int f2fs_read_pm_super(struct f2fs_sb_info *sbi, int *need_recovery){
+	struct f2fs_super_block *raw_super = F2FS_RAW_SUPER(sbi);
+	struct f2fs_pm_info *pm_info = PM_I(sbi);
+	struct f2fs_pm_super *pm_super = PM_S(sbi);
+	void *va_start = pm_info->p_va_start;
+	int err;
+
+	err = __copy_to_user_inatomic(pm_super, (va_start+F2FS_PM_SUPER_ADDR), sizeof(struct f2fs_pm_super));
+
+	if(err)
+		return err;
+	//TODO:判断cp号
+	if(pm_super->magic != F2FS_PM_SUPER_MAGIC){
+		pm_super->magic = F2FS_PM_SUPER_MAGIC;
+		pm_super->nr_blocks = F2FS_BLK_ALIGN(pm_info->p_size);
+		pm_super->valid_node_blk_count = 0;
+		pm_super->cp_blkaddr = (le32_to_cpu(raw_super->cp_blkaddr));
+		pm_super->sit_blkaddr = (le32_to_cpu(raw_super->sit_blkaddr));
+		pm_super->nat_blkaddr = (le32_to_cpu(raw_super->nat_blkaddr));
+		pm_super->ssa_blkaddr = (le32_to_cpu(raw_super->ssa_blkaddr));
+		pm_super->ndb_blkaddr = (le32_to_cpu(raw_super->main_blkaddr));
+		pm_super->fbb_blkaddr = pm_super->ndb_blkaddr + F2FS_BLK_ALIGN(f2fs_bitmap_size(((le32_to_cpu(raw_super->segment_count_nat)>> 1) << le32_to_cpu(raw_super->log_blocks_per_seg)) * NAT_ENTRY_PER_BLOCK));
+		pm_super->frea_area_blkaddr = pm_super->fbb_blkaddr + F2FS_BLK_ALIGN(f2fs_bitmap_size(pm_super->nr_blocks));
+		f2fs_err(sbi, "ndb_blkaddr=%u , fbb_blkaddr=%u , frea_area_blkaddr=%u", pm_super->ndb_blkaddr, pm_super->fbb_blkaddr, pm_super->frea_area_blkaddr);
+	} else {
+		*need_recovery = 1;
+	}
+
+	pm_info->p_super_va_start = va_start + F2FS_PM_SUPER_ADDR;
+	pm_info->p_cp_va_start = va_start + ((unsigned long long)pm_super->cp_blkaddr<<F2FS_BLKSIZE_BITS);
+	pm_info->p_sit_va_start = va_start + ((unsigned long long)pm_super->sit_blkaddr<<F2FS_BLKSIZE_BITS);
+	pm_info->p_nat_va_start = va_start + ((unsigned long long)pm_super->nat_blkaddr<<F2FS_BLKSIZE_BITS);
+	pm_info->p_ssa_va_start = va_start + ((unsigned long long)pm_super->ssa_blkaddr<<F2FS_BLKSIZE_BITS);
+	pm_info->p_ndoe_page_bitmap_va_start = va_start + ((unsigned long long)pm_super->ndb_blkaddr<<F2FS_BLKSIZE_BITS);
+	pm_info->p_free_blocks_bitmap_va_start = va_start + ((unsigned long long)pm_super->fbb_blkaddr<<F2FS_BLKSIZE_BITS);
+
+	return 0;
+}
+
 static int f2fs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct f2fs_sb_info *sbi;
@@ -3459,6 +3662,7 @@ static int f2fs_fill_super(struct super_block *sb, void *data, int silent)
 	struct inode *root;
 	int err;
 	bool skip_recovery = false, need_fsck = false;
+	int need_recovery = 0;//konna
 	char *options = NULL;
 	int recovery, i, valid_super_block;
 	struct curseg_info *seg_i;
@@ -3522,9 +3726,35 @@ try_onemore:
 				le32_to_cpu(raw_super->log_blocksize);
 	sb->s_max_links = F2FS_LINK_MAX;
 
+
 	err = f2fs_setup_casefold(sbi);
 	if (err)
 		goto free_options;
+
+	/* konna */
+	if(test_opt(sbi, PMEM)){
+		err = f2fs_get_pm_info(sbi);
+		if(err)
+			goto free_utf8;
+		
+		err = f2fs_read_pm_super(sbi, &need_recovery);
+		if(err){
+			f2fs_err(sbi, "Failed to read super block on pm");
+			goto free_pm_dev;
+		}
+
+		err = f2fs_alloc_block_free_lists(sbi);
+		if(err){
+			f2fs_err(sbi, "Failed to allocate block free lists");
+			goto free_pm_dev;
+		}
+	} else {
+		f2fs_err(sbi, "Can not run without PMEM");
+		goto free_options;
+	}
+	/* konna */
+	
+	test(sbi);
 
 #ifdef CONFIG_QUOTA
 	sb->dq_op = &f2fs_quota_operations;
@@ -3692,12 +3922,22 @@ try_onemore:
 			 err);
 		goto free_sm;
 	}
+
 	err = f2fs_build_node_manager(sbi);
 	if (err) {
 		f2fs_err(sbi, "Failed to initialize F2FS node manager (%d)",
 			 err);
 		goto free_nm;
 	}
+
+	/* konna */
+	if(test_opt(sbi, PMEM)){
+		err = f2fs_init_blockmap(sbi, need_recovery);
+		if(err){
+			goto free_nm;
+		}
+	}
+	/* konna */
 
 	/* For write statistics */
 	if (sb->s_bdev->bd_part)
@@ -3715,7 +3955,7 @@ try_onemore:
 
 	err = f2fs_build_stats(sbi);
 	if (err)
-		goto free_nm;
+		goto free_range_nodes;// konna
 
 	/* get an inode for node space */
 	sbi->node_inode = f2fs_iget(sb, F2FS_NODE_INO(sbi));
@@ -3892,6 +4132,10 @@ free_node_inode:
 	sbi->node_inode = NULL;
 free_stats:
 	f2fs_destroy_stats(sbi);
+free_range_nodes:// konna
+	if(test_opt(sbi,PMEM)){
+		f2fs_destroy_range_nodes(sbi);
+	}
 free_nm:
 	f2fs_destroy_node_manager(sbi);
 free_sm:
@@ -3915,7 +4159,15 @@ free_percpu:
 free_bio_info:
 	for (i = 0; i < NR_PAGE_TYPE; i++)
 		kvfree(sbi->write_io[i]);
-
+	//konna
+	if(test_opt(sbi,PMEM)){
+		f2fs_delete_free_lists(sbi);
+	}
+free_pm_dev://konna
+	if(test_opt(sbi,PMEM)){
+		f2fs_put_pm_info(sbi);
+	}
+free_utf8:
 #ifdef CONFIG_UNICODE
 	utf8_unload(sb->s_encoding);
 #endif
@@ -3962,6 +4214,7 @@ static void kill_f2fs_super(struct super_block *sb)
 			struct cp_control cpc = {
 				.reason = CP_UMOUNT,
 			};
+			f2fs_info(sbi, "kill_f2fs_super write checkpoint");
 			f2fs_write_checkpoint(sbi, &cpc);
 		}
 
@@ -3990,6 +4243,21 @@ static int __init init_inodecache(void)
 	return 0;
 }
 
+/* konna */
+static int __init init_rangenode_cache(void){
+    f2fs_rangenode_cachep = kmem_cache_create("f2fs_rangenode_cache",
+            sizeof(struct f2fs_range_node), 0, 
+			(SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD), NULL);
+    if (!f2fs_rangenode_cachep)
+        return -ENOMEM;
+    return 0;
+}
+static void destroy_rangenode_cache(void){
+    rcu_barrier();
+    kmem_cache_destroy(f2fs_rangenode_cachep);
+}
+/* konna */
+
 static void destroy_inodecache(void)
 {
 	/*
@@ -4015,9 +4283,13 @@ static int __init init_f2fs_fs(void)
 	err = init_inodecache();
 	if (err)
 		goto fail;
+	err = init_rangenode_cache();/* konna */
+    if (err){
+		goto free_inodecache;
+	}
 	err = f2fs_create_node_manager_caches();
 	if (err)
-		goto free_inodecache;
+		goto free_rangenodecache;
 	err = f2fs_create_segment_manager_caches();
 	if (err)
 		goto free_node_manager_caches;
@@ -4081,6 +4353,8 @@ free_segment_manager_caches:
 	f2fs_destroy_segment_manager_caches();
 free_node_manager_caches:
 	f2fs_destroy_node_manager_caches();
+free_rangenodecache://konna
+	destroy_rangenode_cache();
 free_inodecache:
 	destroy_inodecache();
 fail:
@@ -4103,6 +4377,9 @@ static void __exit exit_f2fs_fs(void)
 	f2fs_destroy_checkpoint_caches();
 	f2fs_destroy_segment_manager_caches();
 	f2fs_destroy_node_manager_caches();
+	/* konna */
+	destroy_rangenode_cache();
+	/* konna */
 	destroy_inodecache();
 	f2fs_destroy_trace_ios();
 }
