@@ -2488,6 +2488,36 @@ static inline s64 valid_inode_count(struct f2fs_sb_info *sbi)
 	return percpu_counter_sum_positive(&sbi->total_valid_inode_count);
 }
 
+// 将内存中的页读到src地址中
+static inline int read_page_from_pm(struct page *dst, void *src, size_t size)
+{
+	int err;
+
+	err = __copy_to_user_inatomic(page_address(dst), src, size);
+	// printk("read pm page %llx\n", (u64)src);
+	if(err)
+		return err;
+	
+	SetPageUptodate(dst);
+	return 0;
+}
+
+// write referenced page in page cache to pm
+// 调用该函数前应当lock & ref
+static inline void write_page_cache_to_pm(void *dst, struct page *src, size_t size)
+{
+	if(__copy_from_user_inatomic(dst, page_address(src), size)){
+		WARN_ON(1);
+	}
+	//printk("page ref : %d\n", page_ref_count(src));
+	
+	if(PageDirty(src)){
+		ClearPageDirty(src);
+		WARN_ON(1);
+	}
+}
+
+
 // lock page并引用计数加一
 static inline struct page *f2fs_grab_cache_page(struct address_space *mapping,
 						pgoff_t index, bool for_write)
@@ -3516,7 +3546,6 @@ unsigned int f2fs_usable_blks_in_seg(struct f2fs_sb_info *sbi,
  */
 void f2fs_stop_checkpoint(struct f2fs_sb_info *sbi, bool end_io);
 struct page *f2fs_grab_meta_page(struct f2fs_sb_info *sbi, pgoff_t index);
-int read_page_from_pm(void *src, struct page *dst, size_t size);
 struct page *f2fs_get_meta_page(struct f2fs_sb_info *sbi, pgoff_t index);
 struct page *f2fs_get_meta_page_on_pm(struct f2fs_sb_info *sbi, pgoff_t index);//konna
 struct page *f2fs_get_meta_page_retry(struct f2fs_sb_info *sbi, pgoff_t index);

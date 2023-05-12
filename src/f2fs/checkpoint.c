@@ -105,21 +105,6 @@ out:
 	return page;
 }
 
-// 将内存中的页读到src地址中
-int read_page_from_pm(void *src, struct page *dst, size_t size)
-{
-	int err;
-
-	err = __copy_to_user_inatomic(page_address(dst), src, size);
-	// printk("read pm page %llx\n", (u64)src);
-	if(err)
-		return err;
-	else{
-		SetPageUptodate(dst);
-		return 0;
-	}
-}
-
 // lock & ref
 static struct page *__get_meta_page_on_pm(struct f2fs_sb_info *sbi, pgoff_t index)
 {
@@ -139,7 +124,7 @@ repeat:
 		goto out;
 	}
 
-	err = read_page_from_pm(src, page, PAGE_SIZE);
+	err = read_page_from_pm(page, src, PAGE_SIZE);
 	
 	if (err) {
 		f2fs_put_page(page, 1);
@@ -427,7 +412,7 @@ int f2fs_ra_meta_pages_on_pm(struct f2fs_sb_info *sbi, block_t start, int nrpage
 			continue;
 		}
 
-		err = read_page_from_pm(src, page, PAGE_SIZE);
+		err = read_page_from_pm(page, src, PAGE_SIZE);
 
 		f2fs_put_page(page, 1);
 
@@ -523,21 +508,6 @@ skip_write:
 	return 0;
 }
 
-// write referenced page in page cache to pm
-// 调用该函数前应当lock & ref
-static void write_page_cache_to_pm(struct page *src, void *dst, size_t size)
-{
-	if(__copy_from_user_inatomic(dst, page_address(src), size)){
-		WARN_ON(1);
-	}
-	//printk("page ref : %d\n", page_ref_count(src));
-	
-	if(PageDirty(src)){
-		ClearPageDirty(src);
-		WARN_ON(1);
-	}
-}
-
 // konna
 // 写完后应当将sum page引用计数减一
 static void f2fs_sync_sum_pages_on_pm(struct f2fs_sb_info *sbi)
@@ -558,7 +528,7 @@ static void f2fs_sync_sum_pages_on_pm(struct f2fs_sb_info *sbi)
 		page = f2fs_grab_cache_page(META_MAPPING(sbi), pm_offset, false);
 		sum_page_va = pm_va_start + ((u64)pm_offset << PAGE_SHIFT);
 
-		write_page_cache_to_pm(page, sum_page_va, PAGE_SIZE);
+		write_page_cache_to_pm(sum_page_va, page, PAGE_SIZE);
 		f2fs_put_page(page, 1);
 		put_page(page);
 		clear_bit(segno, pm_bitmap);

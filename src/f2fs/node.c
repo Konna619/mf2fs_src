@@ -1490,7 +1490,7 @@ static int read_node_page(struct page *page, int op_flags)
 	/* konna ********************************************************/
 	if(ni.on_pm){
 		node_page_on_pm = PM_I(sbi)->p_va_start + ((u64)ni.blk_addr<<PAGE_SHIFT);
-		err = read_page_from_pm(node_page_on_pm, page, PAGE_SIZE);
+		err = read_page_from_pm(page, node_page_on_pm, PAGE_SIZE);
 		unlock_page(page);
 		//f2fs_err(sbi, "read node page from pm nid=%u blkaddr=%u", ni.nid, ni.blk_addr);
 		goto skip_ori_read;
