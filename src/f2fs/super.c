@@ -1321,7 +1321,7 @@ static void f2fs_put_super(struct super_block *sb)
 	f2fs_destroy_stats(sbi);
 
 	/* destroy f2fs internal modules */
-	f2fs_destroy_node_manager(sbi);
+	f2fs_destroy_node_manager(sbi);		// node page bitmap保存在nm_i中，此时销毁
 	f2fs_destroy_segment_manager(sbi);
 
 	f2fs_destroy_post_read_wq(sbi);
@@ -3548,7 +3548,7 @@ static int f2fs_get_pm_info(struct f2fs_sb_info *sbi)
 	struct dax_device *dax_dev;
 	struct block_device *bdev;
 	pfn_t __pfn_t;
-	unsigned long size;
+	long nr_pages;
 	struct f2fs_pm_info *pi = &sbi->pm_info;
 
 	bdev = blkdev_get_by_path(pi->device_path, sbi->sb->s_mode, sbi->sb->s_type);
@@ -3563,22 +3563,40 @@ static int f2fs_get_pm_info(struct f2fs_sb_info *sbi)
 		goto no_dax;
 	}
 
-	size = dax_direct_access(dax_dev, 0, LONG_MAX/PAGE_SIZE, &virt_addr, &__pfn_t) * PAGE_SIZE;
-	if(size <= 0 || !virt_addr){
+	nr_pages = dax_direct_access(dax_dev, 0, LONG_MAX/PAGE_SIZE, &virt_addr, &__pfn_t);
+
+	if(nr_pages <= 0 || !virt_addr){
 		f2fs_warn(sbi, "PM access failed!");
 		goto no_access;
 	}
 
+
 	pi->p_bdev = bdev;
 	pi->p_dax_dev = dax_dev;
-	pi->p_size = size;
+	pi->p_nr_blocks = nr_pages;
+	pi->p_size = nr_pages << PAGE_SHIFT;
 	pi->p_va_start = virt_addr;
 	pi->p_pa_start = pfn_t_to_pfn(__pfn_t) << PAGE_SHIFT;
-	f2fs_info(sbi, "Mount PM device: %s, size: %lu bytes, start va in kernel: %llx, start pa: %llu",
+
+	// SEG0_BLKADDR(sbi) + TOTAL_BLKS(sbi)
+	// pi->p_lba_start = MAX_BLKADDR(sbi); 不可行， (sbi)->log_blocks_per_seg在init_sb_info中初始化，还未到这个函数
+	pi->p_lba_start = le32_to_cpu(F2FS_RAW_SUPER(sbi)->segment0_blkaddr) + (le32_to_cpu(F2FS_RAW_SUPER(sbi)->segment_count) << F2FS_RAW_SUPER(sbi)->log_blocks_per_seg) + F2FS_SSD_PM_HOLE;
+	if(pi->p_lba_start - 1 > UINT_MAX - pi->p_nr_blocks){
+		f2fs_warn(sbi, "Total size of ssd and pm is over 16TB!");
+		goto no_access;
+	}
+	pi->p_lba_end = pi->p_lba_start + pi->p_nr_blocks;
+
+	// f2fs_info(sbi, "UINT_MAX : %u ", UINT_MAX);
+
+	f2fs_info(sbi, "Mount PM device: %s, size: %llu bytes, start va in kernel: %llx, start pa: %llu,\n start block address: %u, end block address: %u",
 					pi->device_path,
 					pi->p_size,
 					(u64)pi->p_va_start,
-					pi->p_pa_start);
+					pi->p_pa_start,
+					pi->p_lba_start,
+					pi->p_lba_end);
+
 
 	return 0;
 
@@ -3628,27 +3646,27 @@ static int f2fs_read_pm_super(struct f2fs_sb_info *sbi, int *need_recovery){
 	if(err)
 		return err;
 	//TODO:判断cp号
-	if(pm_super->magic != cpu_to_le32(F2FS_PM_SUPER_MAGIC)){
+	if(le32_to_cpu(pm_super->magic) != F2FS_PM_SUPER_MAGIC){
 		pm_super->magic = cpu_to_le32(F2FS_PM_SUPER_MAGIC);
-		pm_super->nr_blocks = cpu_to_le32(F2FS_BLK_ALIGN(pm_info->p_size));
+		// pm_super->nr_blocks = cpu_to_le32(pm_info->p_nr_blocks);
 		pm_super->valid_node_blk_count = cpu_to_le32(0);
-		pm_super->cp_blkaddr = raw_super->cp_blkaddr;
-		pm_super->sit_blkaddr = raw_super->sit_blkaddr;
-		pm_super->nat_blkaddr = raw_super->nat_blkaddr;
-		pm_super->ssa_blkaddr = raw_super->ssa_blkaddr;
+		// pm_super->cp_blkaddr = raw_super->cp_blkaddr;
+		// pm_super->sit_blkaddr = raw_super->sit_blkaddr;
+		// pm_super->nat_blkaddr = raw_super->nat_blkaddr;
+		// pm_super->ssa_blkaddr = raw_super->ssa_blkaddr;
 		pm_super->ndb_blkaddr = raw_super->main_blkaddr;
 		pm_super->fbb_blkaddr = cpu_to_le32(le32_to_cpu(pm_super->ndb_blkaddr) + F2FS_BLK_ALIGN(f2fs_bitmap_size(((le32_to_cpu(raw_super->segment_count_nat)>> 1) << le32_to_cpu(raw_super->log_blocks_per_seg)) * NAT_ENTRY_PER_BLOCK)));
-		pm_super->free_area_blkaddr = cpu_to_le32(le32_to_cpu(pm_super->fbb_blkaddr) + F2FS_BLK_ALIGN(f2fs_bitmap_size(le32_to_cpu(pm_super->nr_blocks))));
-		f2fs_info(sbi, "ndb_blkaddr=%u , fbb_blkaddr=%u , free_area_blkaddr=%u", le32_to_cpu(pm_super->ndb_blkaddr), le32_to_cpu(pm_super->fbb_blkaddr), le32_to_cpu(pm_super->free_area_blkaddr));
+		pm_super->free_area_blkaddr = cpu_to_le32(le32_to_cpu(pm_super->fbb_blkaddr) + F2FS_BLK_ALIGN(f2fs_bitmap_size(pm_info->p_nr_blocks)));
+		f2fs_info(sbi, "First mount ndb_blkaddr=%u , fbb_blkaddr=%u , free_area_blkaddr=%u", le32_to_cpu(pm_super->ndb_blkaddr), le32_to_cpu(pm_super->fbb_blkaddr), le32_to_cpu(pm_super->free_area_blkaddr));
 	} else {
+		f2fs_info(sbi, "Not first mount ndb_blkaddr=%u , fbb_blkaddr=%u , free_area_blkaddr=%u", le32_to_cpu(pm_super->ndb_blkaddr), le32_to_cpu(pm_super->fbb_blkaddr), le32_to_cpu(pm_super->free_area_blkaddr));
 		*need_recovery = 1;
 	}
 	
-	pm_info->p_nr_blocks = le32_to_cpu(pm_super->nr_blocks);
-	pm_info->p_cp_blkaddr = le32_to_cpu(pm_super->cp_blkaddr);
-	pm_info->p_sit_blkaddr = le32_to_cpu(pm_super->sit_blkaddr);
-	pm_info->p_nat_blkaddr = le32_to_cpu(pm_super->nat_blkaddr);
-	pm_info->p_ssa_blkaddr = le32_to_cpu(pm_super->ssa_blkaddr);
+	pm_info->p_cp_blkaddr = le32_to_cpu(raw_super->cp_blkaddr);
+	pm_info->p_sit_blkaddr = le32_to_cpu(raw_super->sit_blkaddr);
+	pm_info->p_nat_blkaddr = le32_to_cpu(raw_super->nat_blkaddr);
+	pm_info->p_ssa_blkaddr = le32_to_cpu(raw_super->ssa_blkaddr);
 	pm_info->p_ndb_blkaddr = le32_to_cpu(pm_super->ndb_blkaddr);
 	pm_info->p_fbb_blkaddr = le32_to_cpu(pm_super->fbb_blkaddr);
 	pm_info->p_free_area_blkaddr = le32_to_cpu(pm_super->free_area_blkaddr);

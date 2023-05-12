@@ -1426,18 +1426,19 @@ struct decompress_io_ctx {
 #define MAX_COMPRESS_WINDOW_SIZE(log_size)	((PAGE_SIZE) << (log_size))
 
 #define F2FS_PM_SUPER_MAGIC 0xaabb
-#define F2FS_PM_SUPER_ADDR (3UL<<PAGE_SHIFT)
+#define F2FS_PM_SUPER_ADDR	(3UL<<PAGE_SHIFT)
+#define F2FS_SSD_PM_HOLE	0x0200
 
 struct f2fs_pm_super{
 	__le32 magic;
 
-	__le32 nr_blocks;
+	// __le32 nr_blocks;
 	__le32 valid_node_blk_count;
 
-	__le32 cp_blkaddr;
-	__le32 sit_blkaddr;
-	__le32 nat_blkaddr;
-	__le32 ssa_blkaddr;
+	// __le32 cp_blkaddr;
+	// __le32 sit_blkaddr;
+	// __le32 nat_blkaddr;
+	// __le32 ssa_blkaddr;
 	__le32 ndb_blkaddr;	// nid bitmap offset
 	__le32 fbb_blkaddr;	// free blocks bitmap offset
 	__le32 free_area_blkaddr;
@@ -1448,8 +1449,9 @@ struct f2fs_pm_info{
 	char device_path[DISK_NAME_LEN];	// pm path from mount
 	struct block_device *p_bdev;	// pmem blkdev form blkdev_get_by_path()
 	struct dax_device *p_dax_dev;	// dax_device from fs_dax_get_by_bdev()
+	
+	unsigned long long p_size;	// pm size in bytes
 	void * p_va_start;	// pm virtual start address in kernel
-	unsigned long p_size;	// pm size in bytes
 	phys_addr_t p_pa_start;	// pm physical start address
 
 	/* for pm super block */
