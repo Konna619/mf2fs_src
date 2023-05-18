@@ -58,8 +58,8 @@ struct node_info {
 	block_t	blk_addr;	/* block address of the node */
 	unsigned char version;	/* version of the node */
 	unsigned char flag;	/* for node information bits */
-	unsigned char on_pm;/* 用于判断node page是否在pm上 */
-	bool changed;/* 判断ndoe page的存储位置是否改变 */
+	// unsigned char on_pm;/* 用于判断node page是否在pm上 */
+	// bool changed;/* 判断ndoe page的存储位置是否改变 */
 };
 
 /* konna: for node info on nvm*/
@@ -91,8 +91,8 @@ struct nat_entry {
 #define nat_get_version(nat)		((nat)->ni.version)
 #define nat_set_version(nat, v)		((nat)->ni.version = (v))
 // konna
-#define nat_get_onpm(nat)		((nat)->ni.on_pm)
-#define nat_set_onpm(nat, o)		((nat)->ni.on_pm = (o))
+// #define nat_get_onpm(nat)		((nat)->ni.on_pm)
+// #define nat_set_onpm(nat, o)		((nat)->ni.on_pm = (o))
 
 #define inc_node_version(version)	(++(version))
 
@@ -105,7 +105,7 @@ static inline void copy_node_info(struct node_info *dst,
 	dst->version = src->version;
 	/* should not copy flag here */
 	//dst->flag |= (src->flag & (0x01 << ON_NVM));
-	dst->on_pm = src->on_pm;
+	// dst->on_pm = src->on_pm;
 	// dst->changed = src->changed;
 }
 

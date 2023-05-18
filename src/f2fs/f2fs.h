@@ -928,10 +928,10 @@ struct f2fs_nm_info {
 	unsigned short *free_nid_count;	/* free nid count of NAT block */
 
 	/* for node page on pm */
-	struct rw_semaphore np_bitmap_lock;	/* 位图的读写锁 */
-	unsigned long *node_page_bitmap_on_pm;/* 每个nid对应一个位，为0就在ssd上，被nat_tree_lock保护 */
-	unsigned int node_page_bitmap_on_pm_size;/* 位图字节数 */
-	unsigned int node_page_bitmap_pages;/* 位图页数 */
+	// struct rw_semaphore np_bitmap_lock;	/* 位图的读写锁 */
+	// unsigned long *node_page_bitmap_on_pm;/* 每个nid对应一个位，为0就在ssd上，被nat_tree_lock保护 */
+	// unsigned int node_page_bitmap_on_pm_size;/* 位图字节数 */
+	// unsigned int node_page_bitmap_pages;/* 位图页数 */
 
 	/* for checkpoint */
 	char *nat_bitmap;		/* NAT bitmap pointer */
@@ -1463,7 +1463,7 @@ struct f2fs_pm_info{
 	block_t p_sit_blkaddr;
 	block_t p_nat_blkaddr;
 	block_t p_ssa_blkaddr;
-	block_t p_ndb_blkaddr;	// nid bitmap offset
+	// block_t p_ndb_blkaddr;	// nid bitmap offset
 	block_t p_fbb_blkaddr;	// free blocks bitmap offset
 	block_t p_free_area_blkaddr;
 
@@ -1474,7 +1474,7 @@ struct f2fs_pm_info{
 	void * p_nat_va_start;
 	void * p_ssa_va_start;
 	// void * p_data_block_bitmap_va_start;
-	void * p_ndoe_page_bitmap_va_start;
+	// void * p_ndoe_page_bitmap_va_start;
 	void * p_free_blocks_bitmap_va_start;
 
 	/* for pm block address offset */
@@ -3501,7 +3501,7 @@ void f2fs_update_meta_page(struct f2fs_sb_info *sbi, void *src,
 void f2fs_do_write_meta_page(struct f2fs_sb_info *sbi, struct page *page,
 						enum iostat_type io_type);
 void f2fs_do_write_node_page(unsigned int nid, struct f2fs_io_info *fio);
-int f2fs_do_write_node_page_on_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_page_changed);//konna
+int f2fs_do_write_node_page_on_pm(struct f2fs_io_info *fio, bool from_pm);//konna
 void f2fs_outplace_write_data(struct dnode_of_data *dn,
 			struct f2fs_io_info *fio);
 int f2fs_inplace_write_data(struct f2fs_io_info *fio);

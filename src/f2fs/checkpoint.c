@@ -1733,12 +1733,12 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 }
 
 // konna
-static int f2fs_flush_node_page_bitmap(struct f2fs_sb_info *sbi)
-{
-	struct f2fs_nm_info *nm_i = NM_I(sbi);
+// static int f2fs_flush_node_page_bitmap(struct f2fs_sb_info *sbi)
+// {
+// 	struct f2fs_nm_info *nm_i = NM_I(sbi);
 
-	return __copy_from_user_inatomic_nocache(PM_I(sbi)->p_ndoe_page_bitmap_va_start, nm_i->node_page_bitmap_on_pm, nm_i->node_page_bitmap_on_pm_size);
-}
+// 	return __copy_from_user_inatomic_nocache(PM_I(sbi)->p_ndoe_page_bitmap_va_start, nm_i->node_page_bitmap_on_pm, nm_i->node_page_bitmap_on_pm_size);
+// }
 
 int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 {
@@ -1809,13 +1809,13 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	f2fs_flush_sit_entries(sbi, cpc);
 
 	/* konna : write node page bitmap to pm */
-	if((cpc->reason & CP_UMOUNT)){
-		err = f2fs_flush_node_page_bitmap(sbi);
-		if(err){
-			f2fs_err(sbi, "flush node page bitmap error!");
-			goto stop;
-		} 
-	}
+	// if((cpc->reason & CP_UMOUNT)){
+	// 	err = f2fs_flush_node_page_bitmap(sbi);
+	// 	if(err){
+	// 		f2fs_err(sbi, "flush node page bitmap error!");
+	// 		goto stop;
+	// 	} 
+	// }
 
 	/* save inmem log status */
 	f2fs_save_inmem_curseg(sbi);

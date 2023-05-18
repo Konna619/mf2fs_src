@@ -199,22 +199,22 @@ static void __free_nat_entry(struct nat_entry *e)
 }
 
 // 检查node_info对应的页在哪个设备上
-static void f2fs_check_ni_device(struct f2fs_nm_info *nm_i, struct node_info *ni)
-{
-	unsigned long *bitmap = nm_i->node_page_bitmap_on_pm;
+// static void f2fs_check_ni_device(struct f2fs_nm_info *nm_i, struct node_info *ni)
+// {
+// 	unsigned long *bitmap = nm_i->node_page_bitmap_on_pm;
 
-	down_read(&nm_i->np_bitmap_lock);
+// 	down_read(&nm_i->np_bitmap_lock);
 	
-	if(test_bit(ni->nid, bitmap)){
-		//printk("nid=%u node page is on pm\n", ni->nid);
-		ni->on_pm = 1;
-	}else{
-		//printk("nid=%u node page is on ssd\n", ni->nid);
-		ni->on_pm = 0;
-	}
+// 	if(test_bit(ni->nid, bitmap)){
+// 		//printk("nid=%u node page is on pm\n", ni->nid);
+// 		ni->on_pm = 1;
+// 	}else{
+// 		//printk("nid=%u node page is on ssd\n", ni->nid);
+// 		ni->on_pm = 0;
+// 	}
 
-	up_read(&nm_i->np_bitmap_lock);
-}
+// 	up_read(&nm_i->np_bitmap_lock);
+// }
 
 /* must be locked by nat_tree_lock */
 // no_fail表示不允许失败，f2fs_radix_tree_insert会循环插入缓存
@@ -229,7 +229,7 @@ static struct nat_entry *__init_nat_entry(struct f2fs_nm_info *nm_i,
 
 	if (raw_ne){
 		node_info_from_raw_nat(&ne->ni, raw_ne);
-		f2fs_check_ni_device(nm_i, &ne->ni);
+		// f2fs_check_ni_device(nm_i, &ne->ni);
 	}
 
 	spin_lock(&nm_i->nat_list_lock);
@@ -548,29 +548,29 @@ static void set_node_addr(struct f2fs_sb_info *sbi, struct node_info *ni,
 	if (nat_get_blkaddr(e) != NEW_ADDR && new_blkaddr == NULL_ADDR) {
 		unsigned char version = nat_get_version(e);
 		nat_set_version(e, inc_node_version(version));
-		if(nat_get_onpm(e)){
-			down_write(&nm_i->np_bitmap_lock);
-			clear_bit(nat_get_nid(e), nm_i->node_page_bitmap_on_pm);
-			up_write(&nm_i->np_bitmap_lock);
-			f2fs_free_blocks(sbi, nat_get_blkaddr(e), 1, true);
-			nat_set_onpm(e, 0);
+		if(BLK_IS_ON_PM(sbi, nat_get_blkaddr(e))){
+			// down_write(&nm_i->np_bitmap_lock);
+			// clear_bit(nat_get_nid(e), nm_i->node_page_bitmap_on_pm);
+			// up_write(&nm_i->np_bitmap_lock);
+			f2fs_free_blocks(sbi, BLK_OFFSET_ON_PM(sbi, nat_get_blkaddr(e)), 1, true);
+			// nat_set_onpm(e, 0);
 		}
 	}
 
-	if(ni->changed){
-		if(ni->on_pm){
-			down_write(&nm_i->np_bitmap_lock);
-			set_bit(nat_get_nid(e), nm_i->node_page_bitmap_on_pm);
-			nat_set_onpm(e, 1);
-			//f2fs_err(sbi, "set node page bitmap bit %u", nat_get_nid(e));
-			up_write(&nm_i->np_bitmap_lock);
-		}else{
-			down_write(&nm_i->np_bitmap_lock);
-			clear_bit(nat_get_nid(e), nm_i->node_page_bitmap_on_pm);
-			nat_set_onpm(e, 0);
-			up_write(&nm_i->np_bitmap_lock);
-		}
-	}
+	// if(ni->changed){
+	// 	if(ni->on_pm){
+	// 		down_write(&nm_i->np_bitmap_lock);
+	// 		set_bit(nat_get_nid(e), nm_i->node_page_bitmap_on_pm);
+	// 		nat_set_onpm(e, 1);
+	// 		//f2fs_err(sbi, "set node page bitmap bit %u", nat_get_nid(e));
+	// 		up_write(&nm_i->np_bitmap_lock);
+	// 	}else{
+	// 		down_write(&nm_i->np_bitmap_lock);
+	// 		clear_bit(nat_get_nid(e), nm_i->node_page_bitmap_on_pm);
+	// 		nat_set_onpm(e, 0);
+	// 		up_write(&nm_i->np_bitmap_lock);
+	// 	}
+	// }
 
 	/* change address */
 	nat_set_blkaddr(e, new_blkaddr);
@@ -713,7 +713,7 @@ int f2fs_get_node_info(struct f2fs_sb_info *sbi, nid_t nid,
 		ni->ino = nat_get_ino(e);
 		ni->blk_addr = nat_get_blkaddr(e);
 		ni->version = nat_get_version(e);
-		ni->on_pm = nat_get_onpm(e);//konna
+		// ni->on_pm = nat_get_onpm(e);//konna
 		//f2fs_info(sbi, "cache read nat nid: %u addr: %u", nid, ni->blk_addr);
 		up_read(&nm_i->nat_tree_lock);
 		return 0;
@@ -727,7 +727,7 @@ int f2fs_get_node_info(struct f2fs_sb_info *sbi, nid_t nid,
 	if (i >= 0) {
 		ne = nat_in_journal(journal, i);// 如果找到了，将原始的nat_entry赋值给ni
 		node_info_from_raw_nat(ni, &ne);
-		f2fs_check_ni_device(nm_i, ni);//konna
+		// f2fs_check_ni_device(nm_i, ni);//konna
 	}
 	up_read(&curseg->journal_rwsem);
 	if (i >= 0) {
@@ -748,12 +748,12 @@ int f2fs_get_node_info(struct f2fs_sb_info *sbi, nid_t nid,
 	nat_blk = (struct f2fs_nat_block *)page_address(page);
 	ne = nat_blk->entries[nid - start_nid];//在block中找到nat_entry
 	node_info_from_raw_nat(ni, &ne);
-	f2fs_check_ni_device(nm_i, ni);//konna
+	// f2fs_check_ni_device(nm_i, ni);//konna
 	f2fs_put_page(page, 1);
 	//f2fs_info(sbi, "pm index : %lu read nat nid: %u addr: %u", index, nid, ni->blk_addr);
 cache:
 	blkaddr = le32_to_cpu(ne.block_addr);
-	if (!ni->on_pm && __is_valid_data_blkaddr(blkaddr) &&
+	if (!BLK_IS_ON_PM(sbi, blkaddr) && __is_valid_data_blkaddr(blkaddr) &&
 		!f2fs_is_valid_blkaddr(sbi, blkaddr, DATA_GENERIC_ENHANCE))//blkaddr应当是空闲的？
 		return -EFAULT;
 
@@ -1022,10 +1022,11 @@ static int truncate_node(struct dnode_of_data *dn)
 		return err;
 
 	/* Deallocate node address */
-	if(!ni.on_pm)	//konna
+	// if(!ni.on_pm)	//konna
+	if(!BLK_IS_ON_PM(sbi, ni.blk_addr))
 		f2fs_invalidate_blocks(sbi, ni.blk_addr);
 	dec_valid_node_count(sbi, dn->inode, dn->nid == dn->inode->i_ino);
-	ni.changed = false;
+	// ni.changed = false;
 	set_node_addr(sbi, &ni, NULL_ADDR, false);// 删除ni对应的node page
 
 	if (dn->nid == dn->inode->i_ino) {
@@ -1431,8 +1432,8 @@ struct page *f2fs_new_node_page(struct dnode_of_data *dn, unsigned int ofs)
 	new_ni.blk_addr = NULL_ADDR;
 	new_ni.flag = 0;
 	new_ni.version = 0;
-	new_ni.on_pm = 0;
-	new_ni.changed = false;
+	// new_ni.on_pm = 0;
+	// new_ni.changed = false;
 	set_node_addr(sbi, &new_ni, NEW_ADDR, false);// 将新的node_info的地址设为-1
 
 	f2fs_wait_on_page_writeback(page, NODE, true, true);
@@ -1488,10 +1489,11 @@ static int read_node_page(struct page *page, int op_flags)
 	if (err)
 		return err;
 	/* konna ********************************************************/
-	if(ni.on_pm){
-		node_page_on_pm = PM_I(sbi)->p_va_start + ((u64)ni.blk_addr<<PAGE_SHIFT);
+	if(BLK_IS_ON_PM(sbi, ni.blk_addr)){
+		node_page_on_pm = PM_I(sbi)->p_va_start + ((u64)BLK_OFFSET_ON_PM(sbi, ni.blk_addr)<<PAGE_SHIFT);
 		err = read_page_from_pm(page, node_page_on_pm, PAGE_SIZE);
-		unlock_page(page);
+		if(!err)
+			unlock_page(page);
 		//f2fs_err(sbi, "read node page from pm nid=%u blkaddr=%u", ni.nid, ni.blk_addr);
 		goto skip_ori_read;
 	}
@@ -1732,7 +1734,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 	};
 	unsigned int seq;
 	int err;//konna
-	bool node_page_changed = false;//konna
+	// bool node_page_changed = false;//konna
 
 	trace_f2fs_writepage(page, NODE);
 
@@ -1777,7 +1779,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 		return 0;
 	}
 
-	if (!ni.on_pm && __is_valid_data_blkaddr(ni.blk_addr) &&
+	if (!BLK_IS_ON_PM(sbi, ni.blk_addr) && __is_valid_data_blkaddr(ni.blk_addr) &&
 		!f2fs_is_valid_blkaddr(sbi, ni.blk_addr,
 					DATA_GENERIC_ENHANCE)) {
 		f2fs_err(sbi, "fuck! nid=%u ", ni.nid);
@@ -1790,15 +1792,16 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 	ClearPageError(page);
 	
 	fio.old_blkaddr = ni.blk_addr;
-	err = f2fs_do_write_node_page_on_pm(&fio, ni.on_pm, &node_page_changed);// 写node page到pm中
+	// err = f2fs_do_write_node_page_on_pm(&fio, BLK_IS_ON_PM(ni.blk_addr), &node_page_changed);// 写node page到pm中
+	err = f2fs_do_write_node_page_on_pm(&fio, BLK_IS_ON_PM(sbi, ni.blk_addr));// 写node page到pm中
 	// if(node_page_changed){
 	// 	f2fs_err(sbi, "node page device changed!");
 	// }
-	ni.changed = node_page_changed;
+	// ni.changed = node_page_changed;
 	if(err)
 		goto ori_write;
 	//f2fs_err(sbi, "write node page to pm nid=%u blk_addr=%u", nid, fio.new_blkaddr);
-	ni.on_pm = 1;
+	// ni.on_pm = 1;
 	set_node_addr(sbi, &ni, fio.new_blkaddr, is_fsync_dnode(page));
 	dec_page_count(sbi, F2FS_DIRTY_NODES);
 	up_read(&sbi->node_write);
@@ -2904,10 +2907,10 @@ int f2fs_recover_xattr_data(struct inode *inode, struct page *page)
 	if (err)
 		return err;
 
-	if(!ni.on_pm)	// konna
+	if(!BLK_IS_ON_PM(sbi, ni.blk_addr))	// konna
 		f2fs_invalidate_blocks(sbi, ni.blk_addr);
 	dec_valid_node_count(sbi, inode, false);
-	ni.changed = false;
+	// ni.changed = false;
 	set_node_addr(sbi, &ni, NULL_ADDR, false);
 
 recover_xnid:
@@ -2998,7 +3001,7 @@ retry:
 
 	if (unlikely(inc_valid_node_count(sbi, NULL, true)))
 		WARN_ON(1);
-	new_ni.changed = false;//konna
+	// new_ni.changed = false;//konna
 	set_node_addr(sbi, &new_ni, NEW_ADDR, false);
 	inc_valid_inode_count(sbi);
 	set_page_dirty(ipage);
@@ -3370,7 +3373,7 @@ static int init_node_manager(struct f2fs_sb_info *sbi)
 	struct f2fs_super_block *sb_raw = F2FS_RAW_SUPER(sbi);
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
 	unsigned char *version_bitmap;
-	unsigned char *node_page_bitmap;//konna
+	// unsigned char *node_page_bitmap;//konna
 	unsigned int nat_segs;
 	int err;
 
@@ -3402,7 +3405,7 @@ static int init_node_manager(struct f2fs_sb_info *sbi)
 	mutex_init(&nm_i->build_lock);
 	spin_lock_init(&nm_i->nid_list_lock);
 	init_rwsem(&nm_i->nat_tree_lock);
-	init_rwsem(&nm_i->np_bitmap_lock);//konna
+	// init_rwsem(&nm_i->np_bitmap_lock);//konna
 
 	nm_i->next_scan_nid = le32_to_cpu(sbi->ckpt->next_free_nid);
 	nm_i->bitmap_size = __bitmap_size(sbi, NAT_BITMAP);
@@ -3412,13 +3415,13 @@ static int init_node_manager(struct f2fs_sb_info *sbi)
 	if (!nm_i->nat_bitmap)
 		return -ENOMEM;
 	//konna : build node page bitmap
-	nm_i->node_page_bitmap_on_pm_size = f2fs_bitmap_size(nm_i->max_nid);
-	nm_i->node_page_bitmap_pages = F2FS_BLK_ALIGN(nm_i->node_page_bitmap_on_pm_size);
-	node_page_bitmap = sbi->pm_info.p_ndoe_page_bitmap_va_start;
-	nm_i->node_page_bitmap_on_pm = kmemdup(node_page_bitmap, nm_i->node_page_bitmap_on_pm_size,
-					GFP_KERNEL);
-	if(!nm_i->node_page_bitmap_on_pm)
-		return -ENOMEM;
+	// nm_i->node_page_bitmap_on_pm_size = f2fs_bitmap_size(nm_i->max_nid);
+	// nm_i->node_page_bitmap_pages = F2FS_BLK_ALIGN(nm_i->node_page_bitmap_on_pm_size);
+	// node_page_bitmap = sbi->pm_info.p_ndoe_page_bitmap_va_start;
+	// nm_i->node_page_bitmap_on_pm = kmemdup(node_page_bitmap, nm_i->node_page_bitmap_on_pm_size,
+	// 				GFP_KERNEL);
+	// if(!nm_i->node_page_bitmap_on_pm)
+	// 	return -ENOMEM;
 	
 
 	err = __get_nat_bitmaps(sbi);
@@ -3560,7 +3563,7 @@ void f2fs_destroy_node_manager(struct f2fs_sb_info *sbi)
 	kvfree(nm_i->free_nid_count);
 
 	kvfree(nm_i->nat_bitmap);
-	kvfree(nm_i->node_page_bitmap_on_pm);
+	// kvfree(nm_i->node_page_bitmap_on_pm);
 	kvfree(nm_i->nat_bits);
 #ifdef CONFIG_F2FS_CHECK_FS
 	kvfree(nm_i->nat_bitmap_mir);

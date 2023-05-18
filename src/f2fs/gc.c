@@ -931,7 +931,7 @@ next_step:
 			continue;
 		}
 
-		f2fs_bug_on(sbi, ni.on_pm == 1);// 这里不能回收pm上的node page
+		f2fs_bug_on(sbi, BLK_IS_ON_PM(sbi, ni.blk_addr));// 这里不能回收pm上的node page
 
 		if (ni.blk_addr != start_addr + off) {
 			f2fs_put_page(node_page, 1);

@@ -4076,20 +4076,20 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		inode_lock(inode);
 	}
 
-	ret = generic_write_checks(iocb, from);
+	ret = generic_write_checks(iocb, from);	//检查并返回写的大小或错误码
 	if (ret > 0) {
 		bool preallocated = false;
 		size_t target_size = 0;
 		int err;
 
-		if (iov_iter_fault_in_readable(from, iov_iter_count(from)))
+		if (iov_iter_fault_in_readable(from, iov_iter_count(from)))	//检查是否可读
 			set_inode_flag(inode, FI_NO_PREALLOC);
 
 		if ((iocb->ki_flags & IOCB_NOWAIT)) {
 			if (!f2fs_overwrite_io(inode, iocb->ki_pos,
 						iov_iter_count(from)) ||
 				f2fs_has_inline_data(inode) ||
-				f2fs_force_buffered_io(inode, iocb, from)) {
+				f2fs_force_buffered_io(inode, iocb, from)) {	//在这些条件下不能nowait
 				clear_inode_flag(inode, FI_NO_PREALLOC);
 				inode_unlock(inode);
 				ret = -EAGAIN;

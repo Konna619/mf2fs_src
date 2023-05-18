@@ -3654,8 +3654,9 @@ static int f2fs_read_pm_super(struct f2fs_sb_info *sbi, int *need_recovery){
 		// pm_super->sit_blkaddr = raw_super->sit_blkaddr;
 		// pm_super->nat_blkaddr = raw_super->nat_blkaddr;
 		// pm_super->ssa_blkaddr = raw_super->ssa_blkaddr;
-		pm_super->ndb_blkaddr = raw_super->main_blkaddr;
-		pm_super->fbb_blkaddr = cpu_to_le32(le32_to_cpu(pm_super->ndb_blkaddr) + F2FS_BLK_ALIGN(f2fs_bitmap_size(((le32_to_cpu(raw_super->segment_count_nat)>> 1) << le32_to_cpu(raw_super->log_blocks_per_seg)) * NAT_ENTRY_PER_BLOCK)));
+		// pm_super->ndb_blkaddr = raw_super->main_blkaddr;
+		// pm_super->fbb_blkaddr = cpu_to_le32(le32_to_cpu(pm_super->ndb_blkaddr) + F2FS_BLK_ALIGN(f2fs_bitmap_size(((le32_to_cpu(raw_super->segment_count_nat)>> 1) << le32_to_cpu(raw_super->log_blocks_per_seg)) * NAT_ENTRY_PER_BLOCK)));
+		pm_super->fbb_blkaddr = raw_super->main_blkaddr;
 		pm_super->free_area_blkaddr = cpu_to_le32(le32_to_cpu(pm_super->fbb_blkaddr) + F2FS_BLK_ALIGN(f2fs_bitmap_size(pm_info->p_nr_blocks)));
 		f2fs_info(sbi, "First mount ndb_blkaddr=%u , fbb_blkaddr=%u , free_area_blkaddr=%u", le32_to_cpu(pm_super->ndb_blkaddr), le32_to_cpu(pm_super->fbb_blkaddr), le32_to_cpu(pm_super->free_area_blkaddr));
 	} else {
@@ -3667,7 +3668,7 @@ static int f2fs_read_pm_super(struct f2fs_sb_info *sbi, int *need_recovery){
 	pm_info->p_sit_blkaddr = le32_to_cpu(raw_super->sit_blkaddr);
 	pm_info->p_nat_blkaddr = le32_to_cpu(raw_super->nat_blkaddr);
 	pm_info->p_ssa_blkaddr = le32_to_cpu(raw_super->ssa_blkaddr);
-	pm_info->p_ndb_blkaddr = le32_to_cpu(pm_super->ndb_blkaddr);
+	// pm_info->p_ndb_blkaddr = le32_to_cpu(pm_super->ndb_blkaddr);
 	pm_info->p_fbb_blkaddr = le32_to_cpu(pm_super->fbb_blkaddr);
 	pm_info->p_free_area_blkaddr = le32_to_cpu(pm_super->free_area_blkaddr);
 
@@ -3676,7 +3677,7 @@ static int f2fs_read_pm_super(struct f2fs_sb_info *sbi, int *need_recovery){
 	pm_info->p_sit_va_start = va_start + ((unsigned long long)pm_info->p_sit_blkaddr<<F2FS_BLKSIZE_BITS);
 	pm_info->p_nat_va_start = va_start + ((unsigned long long)pm_info->p_nat_blkaddr<<F2FS_BLKSIZE_BITS);
 	pm_info->p_ssa_va_start = va_start + ((unsigned long long)pm_info->p_ssa_blkaddr<<F2FS_BLKSIZE_BITS);
-	pm_info->p_ndoe_page_bitmap_va_start = va_start + ((unsigned long long)pm_info->p_ndb_blkaddr<<F2FS_BLKSIZE_BITS);
+	// pm_info->p_ndoe_page_bitmap_va_start = va_start + ((unsigned long long)pm_info->p_ndb_blkaddr<<F2FS_BLKSIZE_BITS);
 	pm_info->p_free_blocks_bitmap_va_start = va_start + ((unsigned long long)pm_info->p_fbb_blkaddr<<F2FS_BLKSIZE_BITS);
 
 	return 0;

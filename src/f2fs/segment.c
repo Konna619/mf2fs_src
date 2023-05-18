@@ -3535,7 +3535,7 @@ reallocate:
 }
 
 // 往pm中写page, 成功返回0，失败返回-ENOSPC；并清除了page的dirty标志
-static int do_write_page_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_page_changed)
+static int do_write_node_page_to_pm(struct f2fs_io_info *fio, bool from_pm)
 {
 	struct f2fs_sb_info * sbi = fio->sbi;
 	struct sit_info *sit_i = SIT_I(sbi);
@@ -3543,25 +3543,12 @@ static int do_write_page_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_p
 	/* konna *****************************************************************/
 	unsigned long blocknr = 0;
 	int allocated = 0;
-	unsigned long old_blkaddr = fio->old_blkaddr;
+	unsigned long old_blkaddr = from_pm ? fio->old_blkaddr - PM_I(sbi)->p_lba_start : fio->old_blkaddr;
 	void * dest_addr;
 	int ret;
 
 	allocated = f2fs_new_blocks(sbi, &blocknr, 1, 0, 0, NODE_PM, ALLOC_FROM_HEAD);
-	if(allocated<=0){
-		f2fs_warn(sbi, "PM has no more space for node page!\n");
-		if(!from_pm){// 从ssd写入ssd
-			// goto traditional_wirte_node_page;
-			return -ENOSPC;
-		} else {// 从pm写入ssd，释放pm上的块，将fio的old_blkaddr设为NEW_ADDR
-			f2fs_free_blocks(sbi, old_blkaddr, 1, true);
-			fio->old_blkaddr = NEW_ADDR;
-			// goto traditional_wirte_node_page;
-			*node_page_changed = true;
-			//f2fs_err(sbi, "node page device changed!");
-			return -ENOSPC;
-		}
-	} else {
+	if(allocated > 0){
 		//printk("alloc blkaddr=%lu from pm!\n", blocknr);
 		if(!from_pm){// 从ssd写入pm，释放ssd上的旧块
 			down_write(&sit_i->sentry_lock);
@@ -3570,7 +3557,7 @@ static int do_write_page_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_p
 				update_sit_entry(sbi, old_blkaddr, -1);
 			locate_dirty_segment(sbi, GET_SEGNO(sbi, old_blkaddr));
 			up_write(&sit_i->sentry_lock);
-			*node_page_changed = true;
+			// *node_page_changed = true;
 			//f2fs_err(sbi, "node page device changed!");
 		} else {// 从pm写入pm，释放pm上的旧块
 			f2fs_free_blocks(sbi, old_blkaddr, 1, true);//释放旧块
@@ -3582,7 +3569,7 @@ static int do_write_page_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_p
 		// 写入pm
 		dest_addr = PM_I(sbi)->p_va_start + ((u64)blocknr<<PAGE_SHIFT);
 		ret = __copy_from_user_inatomic_nocache(dest_addr, page_address(fio->page), PAGE_SIZE);
-		fio->new_blkaddr = blocknr;
+		fio->new_blkaddr = blocknr + PM_I(sbi)->p_lba_start; // 关键修改！！！！！
 		if(ret){
 			WARN_ON(1);
 			f2fs_free_blocks(sbi, blocknr, 1, true);
@@ -3592,6 +3579,20 @@ static int do_write_page_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_p
 		}
 		ClearPageDirty(fio->page);
 		return 0;
+
+	} else {
+		f2fs_warn(sbi, "PM has no more space for node page!\n");
+		if(!from_pm){// 从ssd写入ssd
+			// goto traditional_wirte_node_page;
+			return -ENOSPC;
+		} else {// 从pm写入ssd，释放pm上的块，将fio的old_blkaddr设为NEW_ADDR
+			f2fs_free_blocks(sbi, old_blkaddr, 1, true);
+			fio->old_blkaddr = NEW_ADDR;	// 当作新node来对待
+			// goto traditional_wirte_node_page;
+			// *node_page_changed = true;
+			//f2fs_err(sbi, "node page device changed!");
+			return -ENOSPC;
+		}
 	}
 
 	return -ENOSPC;
@@ -3639,11 +3640,11 @@ void f2fs_do_write_node_page(unsigned int nid, struct f2fs_io_info *fio)
 }
 
 // 写node页
-int f2fs_do_write_node_page_on_pm(struct f2fs_io_info *fio, bool from_pm, bool *node_page_changed)
+int f2fs_do_write_node_page_on_pm(struct f2fs_io_info *fio, bool from_pm)
 {
 	int ret;
 
-	ret = do_write_page_pm(fio, from_pm, node_page_changed);
+	ret = do_write_node_page_to_pm(fio, from_pm);
 	if(!ret)
 		f2fs_update_iostat(fio->sbi, fio->io_type, F2FS_BLKSIZE);
 
