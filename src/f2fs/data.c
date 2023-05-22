@@ -1567,11 +1567,11 @@ int f2fs_map_blocks(struct inode *inode, struct f2fs_map_blocks *map,
 
 next_dnode:
 	if (map->m_may_create)
-		f2fs_do_map_lock(sbi, flag, true);
+		f2fs_do_map_lock(sbi, flag, true);	//	加锁
 
 	/* When reading holes, we need its node page */
 	set_new_dnode(&dn, inode, NULL, NULL, 0);
-	err = f2fs_get_dnode_of_data(&dn, pgofs, mode);
+	err = f2fs_get_dnode_of_data(&dn, pgofs, mode);//	拿到起始地址所在的direct node
 	if (err) {
 		if (flag == F2FS_GET_BLOCK_BMAP)
 			map->m_pblk = 0;
@@ -1589,11 +1589,11 @@ next_dnode:
 
 	start_pgofs = pgofs;
 	prealloc = 0;
-	last_ofs_in_node = ofs_in_node = dn.ofs_in_node;
-	end_offset = ADDRS_PER_PAGE(dn.node_page, inode);
+	last_ofs_in_node = ofs_in_node = dn.ofs_in_node;	//	pgofs在direct node中的偏移
+	end_offset = ADDRS_PER_PAGE(dn.node_page, inode);	//	最后的偏移
 
 next_block:
-	blkaddr = f2fs_data_blkaddr(&dn);
+	blkaddr = f2fs_data_blkaddr(&dn);					//	到node page找到数据块地址
 
 	if (__is_valid_data_blkaddr(blkaddr) &&
 		!f2fs_is_valid_blkaddr(sbi, blkaddr, DATA_GENERIC_ENHANCE)) {
@@ -1603,26 +1603,26 @@ next_block:
 
 	if (__is_valid_data_blkaddr(blkaddr)) {
 		/* use out-place-update for driect IO under LFS mode */
-		if (f2fs_lfs_mode(sbi) && flag == F2FS_GET_BLOCK_DIO &&
-							map->m_may_create) {
+		if (f2fs_lfs_mode(sbi) && flag == F2FS_GET_BLOCK_DIO &&	
+							map->m_may_create) {	//	F2FS_GET_BLOCK_DIO仅有f2fs_direct_IO会使用
 			err = __allocate_data_block(&dn, map->m_seg_type);
 			if (err)
 				goto sync_out;
 			blkaddr = dn.data_blkaddr;
 			set_inode_flag(inode, FI_APPEND_WRITE);
 		}
-	} else {
+	} else {	//	第一次写，地址不会有效
 		if (create) {
 			if (unlikely(f2fs_cp_error(sbi))) {
 				err = -EIO;
 				goto sync_out;
 			}
-			if (flag == F2FS_GET_BLOCK_PRE_AIO) {
+			if (flag == F2FS_GET_BLOCK_PRE_AIO) {	//	AIO不会分配块
 				if (blkaddr == NULL_ADDR) {
 					prealloc++;
 					last_ofs_in_node = dn.ofs_in_node;
 				}
-			} else {
+			} else {	//	DIO会分配块
 				WARN_ON(flag != F2FS_GET_BLOCK_PRE_DIO &&
 					flag != F2FS_GET_BLOCK_DIO);
 				err = __allocate_data_block(&dn,
@@ -1686,7 +1686,7 @@ skip:
 			(pgofs == end || dn.ofs_in_node == end_offset)) {
 
 		dn.ofs_in_node = ofs_in_node;
-		err = f2fs_reserve_new_blocks(&dn, prealloc);
+		err = f2fs_reserve_new_blocks(&dn, prealloc);	//	将一个node中的所有datablk设为NEW_ADDR
 		if (err)
 			goto sync_out;
 
@@ -1698,10 +1698,12 @@ skip:
 		dn.ofs_in_node = end_offset;
 	}
 
-	if (pgofs >= end)
+	if (pgofs >= end)	//	到头了
 		goto sync_out;
-	else if (dn.ofs_in_node < end_offset)
+	else if (dn.ofs_in_node < end_offset)	//	本node还没完
 		goto next_block;
+	
+	//	下一个node
 
 	if (flag == F2FS_GET_BLOCK_PRECACHE) {
 		if (map->m_flags & F2FS_MAP_MAPPED) {
@@ -1716,7 +1718,7 @@ skip:
 	f2fs_put_dnode(&dn);
 
 	if (map->m_may_create) {
-		f2fs_do_map_lock(sbi, flag, false);
+		f2fs_do_map_lock(sbi, flag, false);		// 解锁
 		f2fs_balance_fs(sbi, dn.node_changed);
 	}
 	goto next_dnode;
@@ -1739,10 +1741,10 @@ sync_out:
 		if (map->m_next_extent)
 			*map->m_next_extent = pgofs + 1;
 	}
-	f2fs_put_dnode(&dn);
+	f2fs_put_dnode(&dn);	//	最后一个direct node
 unlock_out:
 	if (map->m_may_create) {
-		f2fs_do_map_lock(sbi, flag, false);
+		f2fs_do_map_lock(sbi, flag, false);	//	解锁
 		f2fs_balance_fs(sbi, dn.node_changed);
 	}
 out:

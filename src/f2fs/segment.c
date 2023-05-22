@@ -3539,6 +3539,7 @@ static int do_write_node_page_to_pm(struct f2fs_io_info *fio, bool from_pm)
 {
 	struct f2fs_sb_info * sbi = fio->sbi;
 	struct sit_info *sit_i = SIT_I(sbi);
+	struct page * page = fio->page;
 
 	/* konna *****************************************************************/
 	unsigned long blocknr = 0;
@@ -3563,12 +3564,14 @@ static int do_write_node_page_to_pm(struct f2fs_io_info *fio, bool from_pm)
 			f2fs_free_blocks(sbi, old_blkaddr, 1, true);//释放旧块
 			//f2fs_err(sbi, "free pm block=%lu", old_blkaddr);
 		}
-		if(fio->page){
-			f2fs_inode_chksum_set(sbi, fio->page);
+		if(page){
+		//	TODO : 
+		//	fill_node_footer_blkaddr
+			f2fs_inode_chksum_set(sbi, page);
 		}
 		// 写入pm
 		dest_addr = PM_I(sbi)->p_va_start + ((u64)blocknr<<PAGE_SHIFT);
-		ret = __copy_from_user_inatomic_nocache(dest_addr, page_address(fio->page), PAGE_SIZE);
+		ret = __copy_from_user_inatomic_nocache(dest_addr, page_address(page), PAGE_SIZE);
 		fio->new_blkaddr = blocknr + PM_I(sbi)->p_lba_start; // 关键修改！！！！！
 		if(ret){
 			WARN_ON(1);
@@ -3577,7 +3580,7 @@ static int do_write_node_page_to_pm(struct f2fs_io_info *fio, bool from_pm)
 			// goto traditional_wirte_node_page;
 			return -ENOSPC;
 		}
-		ClearPageDirty(fio->page);
+		ClearPageDirty(page);
 		return 0;
 
 	} else {

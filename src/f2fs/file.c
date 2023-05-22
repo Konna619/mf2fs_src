@@ -31,6 +31,7 @@
 #include "gc.h"
 #include "trace.h"
 #include <trace/events/f2fs.h>
+// #include "trace_mf2fs.h"
 
 static vm_fault_t f2fs_filemap_fault(struct vm_fault *vmf)
 {
@@ -4115,7 +4116,7 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 			 * back to buffered IO.
 			 */
 			if (!f2fs_force_buffered_io(inode, iocb, from) &&
-					allow_outplace_dio(inode, iocb, from))
+					allow_outplace_dio(inode, iocb, from))	// 既是direct，又可以不用buffer，且允许异地写，就直接write?
 				goto write;
 		}
 		preallocated = true;
@@ -4142,11 +4143,13 @@ write:
 
 		if (ret > 0)
 			f2fs_update_iostat(F2FS_I_SB(inode), APP_WRITE_IO, ret);
+		trace_f2fs_file_write_iter_konna(inode, iocb->ki_pos,
+					iov_iter_count(from), target_size, ret);
 	}
 	inode_unlock(inode);
 out:
-	trace_f2fs_file_write_iter(inode, iocb->ki_pos,
-					iov_iter_count(from), ret);
+	// trace_f2fs_file_write_iter(inode, iocb->ki_pos,
+	// 				iov_iter_count(from), ret);
 	if (ret > 0)
 		ret = generic_write_sync(iocb, ret);
 	return ret;

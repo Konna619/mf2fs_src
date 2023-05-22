@@ -1442,6 +1442,8 @@ struct f2fs_pm_super{
 	__le32 ndb_blkaddr;	// nid bitmap offset
 	__le32 fbb_blkaddr;	// free blocks bitmap offset
 	__le32 free_area_blkaddr;
+
+	__le32 prealloc_node_blk;	// TODO:下一个预分配的node块
 };
 
 /* struct for pm information */

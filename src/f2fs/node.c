@@ -836,58 +836,58 @@ static int get_node_path(struct inode *inode, long block,
 
 	noffset[0] = 0;
 
-	if (block < direct_index) {
-		offset[n] = block;
+	if (block < direct_index) {		//前923个块，inode直接存data block的地址
+		offset[n] = block;			//923个地址的第几个地址
 		goto got;
 	}
 	block -= direct_index;
-	if (block < direct_blks) {
-		offset[n++] = NODE_DIR1_BLOCK;
-		noffset[n] = 1;
-		offset[n] = block;
+	if (block < direct_blks) {		//之后1018个块，存在第一个direct node中
+		offset[n++] = NODE_DIR1_BLOCK;	//	第924个地址
+		noffset[n] = 1;					//	第一个node
+		offset[n] = block;				//	在第一个dircet node 1018个地址中的第几个地址
 		level = 1;
 		goto got;
 	}
 	block -= direct_blks;
-	if (block < direct_blks) {
-		offset[n++] = NODE_DIR2_BLOCK;
-		noffset[n] = 2;
-		offset[n] = block;
+	if (block < direct_blks) {		//之后的1018个块，存在第二个direct node	中
+		offset[n++] = NODE_DIR2_BLOCK;	//	第925个地址
+		noffset[n] = 2;					//	第二个node
+		offset[n] = block;				//	在第二个dircet node 1018个地址中的第几个地址
 		level = 1;
 		goto got;
 	}
 	block -= direct_blks;
-	if (block < indirect_blks) {
-		offset[n++] = NODE_IND1_BLOCK;
-		noffset[n] = 3;
-		offset[n++] = block / direct_blks;
-		noffset[n] = 4 + offset[n - 1];
-		offset[n] = block % direct_blks;
+	if (block < indirect_blks) {	//之后的1018*1018个块，存在第一个indirect node中的1018个direct node中
+		offset[n++] = NODE_IND1_BLOCK;	//	第926个地址
+		noffset[n] = 3;					//	第三个node
+		offset[n++] = block / direct_blks;	// 第几个direct node
+		noffset[n] = 4 + offset[n - 1];		// 本indirect node中第几个node + 前面3个node
+		offset[n] = block % direct_blks;	// 在个dircet node 1018个地址中的第几个地址
 		level = 2;
 		goto got;
 	}
 	block -= indirect_blks;
-	if (block < indirect_blks) {
-		offset[n++] = NODE_IND2_BLOCK;
-		noffset[n] = 4 + dptrs_per_blk;
-		offset[n++] = block / direct_blks;
-		noffset[n] = 5 + dptrs_per_blk + offset[n - 1];
-		offset[n] = block % direct_blks;
+	if (block < indirect_blks) {	//之后的1018*1018个块，存在第二个indirect node中的1018个direct node中
+		offset[n++] = NODE_IND2_BLOCK;	//	第927个地址
+		noffset[n] = 4 + dptrs_per_blk;	//	第3 + 1018 + 1个node
+		offset[n++] = block / direct_blks;	// 第几个direct node
+		noffset[n] = 5 + dptrs_per_blk + offset[n - 1];	// 本indirect node中第几个node + 前面3 + 1018 + 1 + 1个node
+		offset[n] = block % direct_blks;	// 在个dircet node 1018个地址中的第几个地址
 		level = 2;
 		goto got;
 	}
 	block -= indirect_blks;
-	if (block < dindirect_blks) {
-		offset[n++] = NODE_DIND_BLOCK;
-		noffset[n] = 5 + (dptrs_per_blk * 2);
-		offset[n++] = block / indirect_blks;
+	if (block < dindirect_blks) {	//之后1018*1018*1018个块，存在第一个dindirect node中的1018个indirect node中
+		offset[n++] = NODE_DIND_BLOCK;	//	第928个地址
+		noffset[n] = 5 + (dptrs_per_blk * 2);	// 第4 + 1018*2 + 1个node
+		offset[n++] = block / indirect_blks;	// 第几个indirect node
 		noffset[n] = 6 + (dptrs_per_blk * 2) +
-			      offset[n - 1] * (dptrs_per_blk + 1);
-		offset[n++] = (block / direct_blks) % dptrs_per_blk;
+			      offset[n - 1] * (dptrs_per_blk + 1);	// 本dindirect node中第几个indirect node * （1018+1） + 前面4 + 1018*2 + 1 + 1个node
+		offset[n++] = (block / direct_blks) % dptrs_per_blk;	// indirect node中第几个direct node
 		noffset[n] = 7 + (dptrs_per_blk * 2) +
 			      offset[n - 2] * (dptrs_per_blk + 1) +
-			      offset[n - 1];
-		offset[n] = block % direct_blks;
+			      offset[n - 1];								//	noffset[n-1] + offset[n-1] + 1
+		offset[n] = block % direct_blks;		//	数据地址
 		level = 3;
 		goto got;
 	} else {
@@ -913,7 +913,7 @@ int f2fs_get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 	int level, i = 0;
 	int err = 0;
 
-	level = get_node_path(dn->inode, index, offset, noffset);
+	level = get_node_path(dn->inode, index, offset, noffset);	// 获取index位置所在的层数，每层node的本层偏移和总偏移
 	if (level < 0)
 		return level;
 
@@ -921,7 +921,7 @@ int f2fs_get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 	npage[0] = dn->inode_page;
 
 	if (!npage[0]) {
-		npage[0] = f2fs_get_node_page(sbi, nids[0]);
+		npage[0] = f2fs_get_node_page(sbi, nids[0]);	//	通过inode号获取inode页
 		if (IS_ERR(npage[0]))
 			return PTR_ERR(npage[0]);
 	}
@@ -935,7 +935,7 @@ int f2fs_get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 
 	parent = npage[0];
 	if (level != 0)
-		nids[1] = get_nid(parent, offset[0], true);
+		nids[1] = get_nid(parent, offset[0], true);	//	如果level层数不为零，去inode页中寻找下一个node号
 	dn->inode_page = npage[0];
 	dn->inode_page_locked = true;
 
@@ -943,33 +943,33 @@ int f2fs_get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 	for (i = 1; i <= level; i++) {
 		bool done = false;
 
-		if (!nids[i] && mode == ALLOC_NODE) {
+		if (!nids[i] && mode == ALLOC_NODE) {	//	nid为0且ALLOC_NODE，就新分配一个node
 			/* alloc new node */
-			if (!f2fs_alloc_nid(sbi, &(nids[i]))) {
+			if (!f2fs_alloc_nid(sbi, &(nids[i]))) {	//	分配一个nid
 				err = -ENOSPC;
 				goto release_pages;
 			}
 
 			dn->nid = nids[i];
-			npage[i] = f2fs_new_node_page(dn, noffset[i]);
+			npage[i] = f2fs_new_node_page(dn, noffset[i]);	//	在页缓存中分配一个页对应dn->nid
 			if (IS_ERR(npage[i])) {
 				f2fs_alloc_nid_failed(sbi, nids[i]);
 				err = PTR_ERR(npage[i]);
 				goto release_pages;
 			}
 
-			set_nid(parent, offset[i - 1], nids[i], i == 1);
+			set_nid(parent, offset[i - 1], nids[i], i == 1);	//	设置上一层页的对应偏移的nid
 			f2fs_alloc_nid_done(sbi, nids[i]);
 			done = true;
-		} else if (mode == LOOKUP_NODE_RA && i == level && level > 1) {
-			npage[i] = f2fs_get_node_page_ra(parent, offset[i - 1]);
+		} else if (mode == LOOKUP_NODE_RA && i == level && level > 1) {	//	如果nid存在，且模式为预读，且在最后一层，且层数大于1
+			npage[i] = f2fs_get_node_page_ra(parent, offset[i - 1]);	//	预读最后一层连续的128个node page
 			if (IS_ERR(npage[i])) {
 				err = PTR_ERR(npage[i]);
 				goto release_pages;
 			}
 			done = true;
 		}
-		if (i == 1) {
+		if (i == 1) {							//	如果层数为1，解锁inode page，否则解锁上一层node page
 			dn->inode_page_locked = false;
 			unlock_page(parent);
 		} else {
@@ -977,19 +977,19 @@ int f2fs_get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 		}
 
 		if (!done) {
-			npage[i] = f2fs_get_node_page(sbi, nids[i]);
+			npage[i] = f2fs_get_node_page(sbi, nids[i]);	//	如果在上面没有读，此时读
 			if (IS_ERR(npage[i])) {
 				err = PTR_ERR(npage[i]);
 				f2fs_put_page(npage[0], 0);
 				goto release_out;
 			}
 		}
-		if (i < level) {
+		if (i < level) {		//	还没到最后，继续
 			parent = npage[i];
 			nids[i + 1] = get_nid(parent, offset[i], false);
 		}
 	}
-	dn->nid = nids[level];
+	dn->nid = nids[level];		//	到最后了，结束
 	dn->ofs_in_node = offset[level];
 	dn->node_page = npage[level];
 	dn->data_blkaddr = f2fs_data_blkaddr(dn);
